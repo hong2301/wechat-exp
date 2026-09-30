@@ -68,36 +68,68 @@ WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 WECHAT_EXES = {"wechat.exe", "weixin.exe"}
 
 
+WECHAT_APPEX = "WeChatAppEx.exe"      # 小程序/外部容器进程
+WM_CLOSE = 0x0010
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+SM_CXSCREEN = 0
+SM_CYSCREEN = 1
+
+
+class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("cb", wt.DWORD), ("PageFaultCount", wt.DWORD),
+        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
 def _kernel32():
-    return ctypes.windll.kernel32
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    return k32
 
 
 def _user32():
-    return ctypes.windll.user32
+    u32 = ctypes.windll.user32
+    u32.PostMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t, ctypes.c_size_t]
+    u32.GetSystemMetrics.restype = ctypes.c_int
+    return u32
 
 
 # ---------------------------------------------------------------------------
 # 进程检测（独立实现）
 # ---------------------------------------------------------------------------
-def _wechat_pids() -> List[int]:
-    """枚举当前所有微信进程 PID。"""
+def _pids_by_exe(exe_names) -> List[int]:
+    """按可执行文件名集合枚举进程 PID（不区分大小写）。"""
+    if not exe_names:
+        return []
     k32 = _kernel32()
     snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snap in (None, 0, INVALID_HANDLE_VALUE):
         return []
+    want = {n.lower() for n in exe_names}
     pids = []
     try:
         entry = PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
         if k32.Process32FirstW(snap, ctypes.byref(entry)):
             while True:
-                if entry.szExeFile.lower() in WECHAT_EXES:
+                if entry.szExeFile.lower() in want:
                     pids.append(entry.th32ProcessID)
                 if not k32.Process32NextW(snap, ctypes.byref(entry)):
                     break
     finally:
         k32.CloseHandle(snap)
     return pids
+
+
+def _wechat_pids() -> List[int]:
+    """枚举当前所有微信（Weixin/WeChat）进程 PID。"""
+    return _pids_by_exe(WECHAT_EXES)
 
 
 def is_wechat_running() -> bool:
@@ -149,8 +181,8 @@ def get_active_data_dir() -> Optional[str]:
 # ---------------------------------------------------------------------------
 # 窗口检测（独立实现，仅作降级参考）
 # ---------------------------------------------------------------------------
-def _wechat_windows(pids: List[int]) -> List[Tuple[int, str, bool]]:
-    """枚举属于微信进程的所有顶层窗口 [(hwnd, title, visible), ...]。"""
+def _windows_for_pids(pids: List[int]) -> List[Tuple[int, str, bool, int]]:
+    """枚举属于指定进程集合的顶层窗口 [(hwnd, title, visible, pid), ...]。"""
     if not pids:
         return []
     u32 = _user32()
@@ -163,11 +195,188 @@ def _wechat_windows(pids: List[int]) -> List[Tuple[int, str, bool]]:
         pid = wt.DWORD()
         u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value in pid_set:
-            result.append((hwnd, buf.value, bool(u32.IsWindowVisible(hwnd))))
+            result.append((hwnd, buf.value, bool(u32.IsWindowVisible(hwnd)), pid.value))
         return True
 
     u32.EnumWindows(WNDENUMPROC(callback), 0)
     return result
+
+
+def _wechat_windows(pids: List[int]) -> List[Tuple[int, str, bool]]:
+    """枚举属于微信进程的所有顶层窗口 [(hwnd, title, visible), ...]（兼容旧签名）。"""
+    return [(h, t, v) for h, t, v, _p in _windows_for_pids(pids)]
+
+
+# ---------------------------------------------------------------------------
+# 窗口管理：唯一主窗口 + 关闭冗余窗口（健壮性）
+# ---------------------------------------------------------------------------
+def _process_working_set(pid: int) -> int:
+    """进程工作集大小（字节），失败返回 0。"""
+    k32 = _kernel32()
+    h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return 0
+    try:
+        psapi = ctypes.WinDLL('psapi', use_last_error=True)
+        psapi.GetProcessMemoryInfo.restype = wt.BOOL
+        psapi.GetProcessMemoryInfo.argtypes = [ctypes.c_void_p,
+                                               ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+                                               wt.DWORD]
+        pmc = PROCESS_MEMORY_COUNTERS()
+        pmc.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        if psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
+            return int(pmc.WorkingSetSize)
+        return 0
+    finally:
+        k32.CloseHandle(h)
+
+
+def _close_window(hwnd: int) -> None:
+    """发送 WM_CLOSE 关闭窗口（正常关闭流程）。"""
+    try:
+        _user32().PostMessageW(hwnd, WM_CLOSE, 0, 0)
+    except Exception:
+        pass
+
+
+def _select_main_hwnd(pids: List[int]):
+    """从微信可见窗口中选出唯一主窗口句柄。
+
+    优先：标题含「微信」的主窗口；若多个，取内存占用最大者。
+    返回 hwnd 或 None。
+    """
+    wins = [(h, t, v, p) for h, t, v, p in _windows_for_pids(pids) if v]
+    if not wins:
+        return None
+    mains = [w for w in wins if '微信' in w[1] or 'wechat' in w[1].lower()]
+    pool = mains if mains else wins
+    # 按进程工作集降序取最大
+    best = max(pool, key=lambda w: _process_working_set(w[3]))
+    return best[0]
+
+
+def _close_redundant_windows(pids: List[int]) -> List[str]:
+    """确保只剩一个微信主窗口：关闭多余可见 Weixin 窗口与全部可见 WeChatAppEx。
+
+    返回日志列表。
+    """
+    logs = []
+    if not pids:
+        return logs
+    # 1) 微信主窗口：保留唯一主窗口，其余可见窗口关闭
+    wins = [(h, t, v, p) for h, t, v, p in _windows_for_pids(pids) if v]
+    if len(wins) > 1:
+        keep = _select_main_hwnd(pids)
+        if keep:
+            for h, t, v, p in wins:
+                if h != keep:
+                    _close_window(h)
+                    logs.append(f"关闭多余微信窗口 #{h} ({t})")
+            logs.append(f"保留主窗口 #{keep} ")
+    # 2) 关闭可见 WeChatAppEx（小程序容器，避免干扰）
+    appex_pids = _pids_by_exe([WECHAT_APPEX])
+    for h, t, v, p in _windows_for_pids(appex_pids):
+        if v:
+            _close_window(h)
+            logs.append(f"关闭 WeChatAppEx 窗口 #{h}")
+    return logs
+
+
+def _verify_left_half(hwnd: int, half_w: int) -> bool:
+    """校验窗口是否就位于左半屏（左缘≈0 且 宽度≈半屏）。"""
+    r = wt.RECT()
+    _user32().GetWindowRect(hwnd, ctypes.byref(r))
+    return abs(r.left) <= 2 and abs((r.right - r.left) - half_w) <= 2
+
+
+def get_window_width(hwnd: int = None) -> int:
+    """读取微信主窗口当前宽度（px）；无主窗口返回 0。"""
+    if hwnd is None:
+        pids = _wechat_pids()
+        if not pids:
+            return 0
+        hwnd = _find_main_hwnd(pids)
+    if not hwnd:
+        return 0
+    r = wt.RECT()
+    _user32().GetWindowRect(hwnd, ctypes.byref(r))
+    return r.right - r.left
+
+
+_CHILDPROC_T = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+
+def has_embedded_page(hwnd: int = None) -> bool:
+    """检测微信主窗口内是否嵌入了独立渲染页面（如「搜一搜」）。
+
+    原理（零依赖、毫秒级）：微信 4.x 主界面无 Chrome_RenderWidgetHostHWND；
+    嵌入的 web 页面（搜一搜等）会新建该渲染宿主子窗口。
+    实测：正常聊天 = 0 个、搜一搜嵌入页 = 1 个。
+    """
+    if hwnd is None:
+        pids = _wechat_pids()
+        if not pids:
+            return False
+        hwnd = _find_main_hwnd(pids)
+    if not hwnd:
+        return False
+    found = []
+    u32 = _user32()
+
+    def cb(h, lp):
+        buf = ctypes.create_unicode_buffer(64)
+        u32.GetClassNameW(h, buf, 64)
+        if buf.value == 'Chrome_RenderWidgetHostHWND':
+            found.append(h)
+        return True
+
+    try:
+        u32.EnumChildWindows(wt.HWND(hwnd), _CHILDPROC_T(cb), 0)
+    except Exception:
+        return False
+    return bool(found)
+
+
+# 点击第一联系人后，出现即判失败的额外可见窗口标题关键词
+FAIL_EXTRA_TITLES = ("搜一搜", "添加朋友", "添加好友", "搜索网络")
+
+
+def _window_area(hwnd: int) -> int:
+    """窗口面积（宽×高），失败返回 0。"""
+    r = wt.RECT()
+    _user32().GetWindowRect(hwnd, ctypes.byref(r))
+    return max(0, r.right - r.left) * max(0, r.bottom - r.top)
+
+
+def _find_main_hwnd_from(pids: List[int]) -> Optional[int]:
+    """从微信进程可见窗口中选主窗口：标题含「微信」，若多个取面积最大。"""
+    mains = [w for w in _windows_for_pids(pids)
+             if w[2] and ('微信' in w[1] or 'wechat' in w[1].lower())]
+    if not mains:
+        return None
+    return max(mains, key=lambda w: _window_area(w[0]))[0]
+
+
+def extra_visible_windows(exclude_main=True) -> list:
+    """枚举微信相关的所有额外可见窗口（非主窗口）。
+
+    主窗口 = 可见 + 标题含「微信」+ 面积最大（弹出的小窗标题也可能是「微信」）。
+    覆盖：Weixin 进程的非主窗口 + WeChatAppEx 进程可见窗口。
+    返回 [(hwnd, title), ...]
+    """
+    out = []
+    pids = _wechat_pids()
+    main_hwnd = _find_main_hwnd_from(pids) if (pids and exclude_main) else None
+    for h, t, v, p in _windows_for_pids(pids):
+        if not v:
+            continue
+        if main_hwnd is not None and h == main_hwnd:
+            continue
+        out.append((h, t))
+    for h, t, v, p in _windows_for_pids(_pids_by_exe([WECHAT_APPEX])):
+        if v:
+            out.append((h, t))
+    return out
 
 
 _LOGIN_KEYWORDS = ("登录", "login", "扫一扫", "二维码")
@@ -239,16 +448,10 @@ VK_MENU = 0x12
 
 
 def _find_main_hwnd(pids: List[int]):
-    """找微信主窗口句柄（优先可见窗口，标题含「微信」/「WeChat」）。"""
+    """找微信主窗口句柄：可见 + 标题含「微信」/「WeChat」，若多个取面积最大。"""
     if not pids:
         return None
-    wins = _wechat_windows(pids)
-    # 先可见的，再任意
-    for w in sorted(wins, key=lambda x: not x[2]):
-        t = w[1].strip().lower()
-        if any(k in t for k in _MAIN_KEYWORDS):
-            return w[0]
-    return None
+    return _find_main_hwnd_from(pids)
 
 
 def _force_foreground(hwnd):
@@ -301,36 +504,84 @@ def _move_to_left_half(hwnd) -> bool:
 
 
 def init_wechat_window() -> dict:
-    """微信窗口初始化：前置微信主窗口并移动到左半屏。
+    """微信窗口初始化（健壮版）：确保**唯一**微信主窗口前置并位于左半屏。
+
+    步骤：
+        0) 若内嵌「搜一搜」页：点击点位4（分离按钮）先关闭嵌入页
+        1) 关闭多余可见 Weixin 窗口（按标题/面积保留唯一主窗口）
+        2) 关闭可见 WeChatAppEx 窗口（避免干扰）
+        3) 唤出微信主窗口（恢复/显示/前置）
+        4) 移动到左半屏（半屏宽 × 工作区满高）
+        5) 校验是否就位（left≈0 且 宽≈半屏）；不合法重试一次
 
     返回: {"ok": bool, "code": str, "message": str}
-        code: OK / ERR_NO_WECHAT / ERR_NO_MAIN_WINDOW / ERR_MOVE_FAILED
+        code: OK / OK_DEGRADED / ERR_NO_WECHAT / ERR_NO_MAIN_WINDOW / ERR_MOVE_FAILED / ERR_INTERNAL
     """
-    pids = _wechat_pids()
-    if not pids:
-        return {"ok": False, "code": "ERR_NO_WECHAT", "message": "微信未运行"}
-    hwnd = _find_main_hwnd(pids)
-    if not hwnd:
-        return {"ok": False, "code": "ERR_NO_MAIN_WINDOW",
-                "message": "未找到微信主窗口（可能尚未打开主界面）"}
-    try:
-        # 唤出（恢复/显示）并前置
+    if has_embedded_page():
+        try:
+            import points
+            import wechat_input
+            pt = points.get_point("search_split_button")
+            if pt:
+                for _i in range(2):
+                    wechat_input.mouse_click(pt["x"], pt["y"], wait_after=0.8)
+                    if not has_embedded_page():
+                        break
+        except Exception:
+            pass
+    import time
+    logs = []
+
+    def once() -> (bool, str):
+        # 单次初始化
+        pids = _wechat_pids()
+        if not pids:
+            return False, "微信未运行"
+        logs.extend(_close_redundant_windows(pids))
+        hwnd = _find_main_hwnd(pids)
+        if not hwnd:
+            # 兜底：按进程找任意可见窗口唤出
+            wins = [(h, t, v, p) for h, t, v, p in _windows_for_pids(pids)]
+            if wins:
+                hwnd = wins[0][0]
+                logs.append(f"兜底唤出窗口 #{hwnd}")
+        if not hwnd:
+            return False, "未找到微信主窗口（可能尚未打开主界面）"
+        # 唤出并前置
         u32 = _user32()
         u32.ShowWindow(hwnd, SW_RESTORE)
-        import time
         time.sleep(0.1)
         u32.ShowWindow(hwnd, SW_SHOW)
         time.sleep(0.1)
         _force_foreground(hwnd)
         # 移动到左半屏
-        if not _move_to_left_half(hwnd):
-            return {"ok": False, "code": "ERR_MOVE_FAILED",
-                    "message": "获取工作区失败，无法移动窗口"}
-        _force_foreground(hwnd)
-        return {"ok": True, "code": "OK", "message": "微信窗口已前置并移动到左半屏"}
-    except Exception as e:
-        return {"ok": False, "code": "ERR_INTERNAL",
-                "message": f"窗口初始化异常: {type(e).__name__}: {e}"}
+        area = _work_area()
+        if not area:
+            return False, "获取工作区失败"
+        x1, y1, x2, y2 = area
+        half_w = (x2 - x1) // 2
+        _move_to_left_half(hwnd)
+        if _verify_left_half(hwnd, half_w):
+            logs.append(f"主窗口 #{hwnd} 已就位左半屏 ({half_w}px)")
+            return True, "; ".join(logs)
+        return False, f"主窗口 #{hwnd} 未就位左半屏"
+
+    ok, info = once()
+    if ok:
+        return {"ok": True, "code": "OK", "message": info}
+    # 左半屏未就位：重试一次，仍失败则降级（不阻塞任务）——
+    # 只要微信主窗口可见即可继续，宽度由用户布局决定
+    time.sleep(0.5)
+    ok2, info2 = once()
+    if ok2:
+        return {"ok": True, "code": "OK", "message": info2}
+    pids = _wechat_pids()
+    hwnd = _find_main_hwnd(pids) if pids else None
+    if hwnd:
+        return {"ok": True, "code": "OK_DEGRADED",
+                "message": f"主窗口已前置可见（左半屏未就位: {info2}，降级继续）"}
+    return {"ok": False, "code": "ERR_NO_MAIN_WINDOW",
+            "message": f"找不到微信主窗口: {info2}"}
 
 
 # ---------------------------------------------------------------------------
