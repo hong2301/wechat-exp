@@ -18,8 +18,9 @@
 my_automation/
 ├── __init__.py        ← 模块说明
 ├── README.md          ← 本规范文档
-├── wechat_status.py   ← 模块①：微信状态（检测是否运行 / 是否登录）
-├── sender.py          ← 模块②：发消息核心（待实现）
+├── wechat_status.py   ← 模块①：微信状态（运行 / 登录 / 窗口初始化）
+├── points.py          ← 模块②：点位（搜索框 / 第一联系人 / 聊天输入框）
+├── sender.py          ← 模块③：发消息核心（待实现）
 └── ...
 ```
 
@@ -44,3 +45,22 @@ my_automation/
 | `get_active_data_dir()` | 当前被锁定/使用中的目录（无则 None） |
 | `init_wechat_window()` | 窗口初始化：前置主窗口并移动到左半屏 |
 | `get_status()` | 汇总返回状态 dict |
+
+### points.py — 点位模块
+
+点位：`search_box`（搜索框）/ `first_contact`（第一联系人）/ `chat_input`（聊天输入框），存储于 `points.json`（已 gitignore）。
+
+| 方法 | 说明 |
+|---|---|
+| `load_points()` / `get_points()` | 读取全部点位 |
+| `get_point(name)` | 读取单个点位 |
+| `save_points(points)` | 保存全部点位 |
+| `capture_all()` | 交互式采集 3 个点位（单击预览/双击确认/右键取消） |
+| `capture_one(prompt)` | 交互式采集单个点位 |
+| `clear_points()` | 清空点位 |
+
+```bash
+python my_automation/points.py show      # 查看点位
+python my_automation/points.py capture   # 交互采集
+python my_automation/points.py clear     # 清空
+```
