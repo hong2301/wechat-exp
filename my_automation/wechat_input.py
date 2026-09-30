@@ -33,6 +33,216 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 VK_CONTROL = 0x11
 VK_RETURN = 0x0D
 VK_DELETE = 0x2E
+VK_A = 0x41
+VK_V = 0x56
+VK_BACK = 0x08
+VK_END = 0x23
+VK_ESCAPE = 0x1B
+VK_DOWN = 0x28
+VK_UP = 0x26
+
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
+WM_SETFOCUS = 0x0007
+MK_LBUTTON = 0x0001
+
+# ---------------------------------------------------------------------------
+# 窗口级投递（PostMessage 直达微信窗口，不依赖系统焦点）
+# 用途：Deskflow/远程键鼠切走时，系统级注入可能失效，
+#       窗口级投递仍能直接操作微信窗口。
+# ---------------------------------------------------------------------------
+
+def _target_window():
+    """获取微信主窗口句柄（供窗口级操作）。"""
+    import wechat_status as ws
+    return ws._find_main_hwnd(ws._wechat_pids())
+
+
+def _target_window():
+    """获取微信主窗口句柄（供窗口级操作）。"""
+    import wechat_status as ws
+    return ws._find_main_hwnd(ws._wechat_pids())
+
+
+def _dropdown_window():
+    """获取微信搜索下拉列表窗口（Qt 可见窗口，title='Weixin'）。
+
+    搜索框聚焦后微信会弹出独立的 Qt 下拉窗口（368x802 左右），
+    输入与“第一联系人”点击都在该窗口内进行；无下拉时返回 None。
+    """
+    import wechat_status as ws
+    for h, t, v, p in ws._windows_for_pids(ws._wechat_pids()):
+        if v and t.strip() == 'Weixin':
+            return h
+    return None
+
+
+def _active_input_target():
+    """输入目标：优先搜索下拉窗口，无则主窗口。"""
+    return _dropdown_window() or _target_window()
+
+
+# 点位采集时微信窗口的基准尺寸（点位均按此布局录制）
+BASE_W, BASE_H = 768, 864
+
+
+def adapt_client_pt(x, y, hwnd=None):
+    """点位自适应：按 当前窗口尺寸/基准尺寸 等比换算客户区坐标。
+
+    解决窗口被拉伸/缩放（Deskflow、用户拖动）后点位错位问题。
+    输入为点位录制时的屏幕坐标（录制时窗口位于左上角 0,0）。
+    返回 (client_x, client_y)。
+    """
+    if hwnd is None:
+        hwnd = _target_window()
+    r = wt.RECT()
+    _user32().GetWindowRect(hwnd, ctypes.byref(r))
+    cur_w = max(r.right - r.left, 1)
+    cur_h = max(r.bottom - r.top, 1)
+    cx = max(0, min(cur_w, (int(x) - r.left) * cur_w // BASE_W))
+    cy = max(0, min(cur_h, (int(y) - r.top) * cur_h // BASE_H))
+    return cx, cy
+
+
+def adapt_screen_pt(x, y, hwnd=None):
+    """点位自适应（屏幕坐标版）：用于系统级 SetCursorPos。"""
+    if hwnd is None:
+        hwnd = _target_window()
+    r = wt.RECT()
+    _user32().GetWindowRect(hwnd, ctypes.byref(r))
+    cur_w = max(r.right - r.left, 1)
+    cur_h = max(r.bottom - r.top, 1)
+    sx = r.left + (int(x) - r.left) * cur_w // BASE_W
+    sy = r.top + (int(y) - r.top) * cur_h // BASE_H
+    return sx, sy
+
+
+def post_click(x, y, hwnd=None):
+    """窗口内点击（点位自适应 → 客户区坐标 → PostMessage）。"""
+    try:
+        u32 = _user32()
+        if hwnd is None:
+            hwnd = _target_window()
+        if not hwnd:
+            return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+        if hwnd is None:
+            # 默认主窗口：按基础尺寸比例自适应
+            cx, cy = adapt_client_pt(x, y, hwnd)
+        else:
+            # 指定窗口（如搜索下拉窗口）：直接屏幕坐标→客户区（独立窗口不缩放）
+            pt0 = wt.POINT(int(x), int(y))
+            u32.ScreenToClient(hwnd, ctypes.byref(pt0))
+            cx, cy = pt0.x, pt0.y
+        lp = (cy & 0xFFFF) << 16 | (cx & 0xFFFF)
+        u32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lp)
+        time.sleep(0.05)
+        u32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lp)
+        u32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lp)
+        # 让 Chromium 编辑框获得键盘焦点（无系统焦点时的关键一步）
+        u32.SendMessageW.restype = ctypes.c_ssize_t
+        u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t,
+                                     ctypes.c_ssize_t]
+        u32.SendMessageW(hwnd, WM_SETFOCUS, 0, 0)
+        time.sleep(0.1)
+        return {"ok": True, "code": "OK",
+                "message": f"窗口内点击 ({x}, {y}) → 客户区 ({cx}, {cy})"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_POST",
+                "message": f"窗口点击失败: {type(e).__name__}: {e}"}
+
+
+def post_text(text, hwnd=None, char_delay=0.02):
+    """窗口内输入文本（同步 SendMessage 击键投递，支持中文）。
+
+    每字符发送 WM_KEYDOWN(0)+WM_CHAR(码点)+WM_KEYUP(0)，lParam 为标准击键格式
+    （repeat=1, scan, prev/transition 标志），比异步 PostMessage 更可靠。
+    返回: {"ok", "code", "message"}
+    """
+    try:
+        u32 = _user32()
+        if hwnd is None:
+            hwnd = _target_window()   # 输入/键盘一律投主窗口（搜索框在主窗口；下拉仅显示）
+        if not hwnd:
+            return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+        u32.SendMessageW.restype = ctypes.c_ssize_t
+        u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t,
+                                     ctypes.c_ssize_t]
+        for ch in str(text):
+            scan = ord(ch) & 0xFF
+            lparam_down = 1 | (scan << 16)
+            lparam_char = 1 | (scan << 16)
+            lparam_up = 1 | 0xC0000000 | (scan << 16)   # prev+transition
+            u32.SendMessageW(hwnd, WM_KEYDOWN, 0, lparam_down)
+            u32.SendMessageW(hwnd, WM_CHAR, ord(ch), lparam_char)
+            u32.SendMessageW(hwnd, WM_KEYUP, 0, lparam_up)
+            if char_delay:
+                time.sleep(char_delay)
+        return {"ok": True, "code": "OK",
+                "message": f"窗口内输入 {len(str(text))} 字符"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_POST",
+                "message": f"窗口输入失败: {type(e).__name__}: {e}"}
+
+
+def post_key(vk, hwnd=None, wait=0.06):
+    """窗口内按键（按下+抬起）。"""
+    try:
+        u32 = _user32()
+        if hwnd is None:
+            hwnd = _target_window()   # 输入/键盘一律投主窗口（搜索框在主窗口；下拉仅显示）
+        if not hwnd:
+            return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+        u32.PostMessageW(hwnd, WM_KEYDOWN, vk, 1)
+        if wait:
+            time.sleep(wait)
+        u32.PostMessageW(hwnd, WM_KEYUP, vk, 1)
+        time.sleep(0.05)
+        return {"ok": True, "code": "OK", "message": f"窗口内按键 0x{vk:x}"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_POST",
+                "message": f"窗口按键失败: {type(e).__name__}: {e}"}
+
+
+def post_clear(hwnd=None, max_backspaces=60):
+    """窗口内清空输入框（同步击键流：End + 多次 Backspace）。
+
+    只依赖窗口消息，不要求系统焦点；Backspace 用 WM_KEYDOWN 而非 WM_CHAR
+    （Chromium 对 WM_CHAR backspace 兼容性差）。
+    """
+    try:
+        u32 = _user32()
+        if hwnd is None:
+            hwnd = _target_window()   # 输入/键盘一律投主窗口（搜索框在主窗口；下拉仅显示）
+        if not hwnd:
+            return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+        u32.SendMessageW.restype = ctypes.c_ssize_t
+        u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t,
+                                     ctypes.c_ssize_t]
+
+        def _key(vk, flags=0):
+            lp = (1 | (flags << 30))  # repeat=1; flags: 2=transition
+            u32.SendMessageW(hwnd, WM_KEYDOWN if not flags else WM_KEYUP,
+                             vk, lp)
+
+        # 光标到末尾
+        _key(VK_END, 0)
+        _key(VK_END, 2)
+        time.sleep(0.05)
+        # 连续 Backspace 清空
+        for _i in range(max_backspaces):
+            _key(VK_BACK, 0)
+            _key(VK_BACK, 2)
+            time.sleep(0.012)
+        time.sleep(0.1)
+        return {"ok": True, "code": "OK",
+                "message": f"窗口内清空输入框 (End+BS×{max_backspaces})"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_POST",
+                "message": f"窗口清空失败: {type(e).__name__}: {e}"}
 
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
@@ -104,7 +314,8 @@ def mouse_click(x, y, hold_ms=80, wait_after=0):
     """
     try:
         u32 = _user32()
-        u32.SetCursorPos(int(x), int(y))
+        sx, sy = adapt_screen_pt(int(x), int(y))   # 点位自适应（窗口尺寸变化时仍准）
+        u32.SetCursorPos(sx, sy)
         time.sleep(0.05)
         u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
         if hold_ms:
@@ -113,7 +324,7 @@ def mouse_click(x, y, hold_ms=80, wait_after=0):
         if wait_after:
             time.sleep(wait_after)
         return {"ok": True, "code": "OK",
-                "message": f"已点击 ({x}, {y})"}
+                "message": f"已点击 ({sx}, {sy})"}
     except Exception as e:
         return {"ok": False, "code": "ERR_CLICK",
                 "message": f"点击失败: {type(e).__name__}: {e}"}

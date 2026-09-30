@@ -187,11 +187,36 @@ def _paste_from_clipboard():
 # ---------------------------------------------------------------------------
 # 对外方法
 # ---------------------------------------------------------------------------
+def _focus_and_clear_input(window_mode=False) -> dict:
+    """点击聊天输入框并清空内容（每次输入前调用）。
+
+    系统级：mouse_click(chat_input) + Ctrl+A+Delete
+    窗口级：post_click(chat_input) + 窗口内清空
+    """
+    import points
+    pt = points.get_point("chat_input")
+    if not pt:
+        return {"ok": False, "code": "ERR_NO_POINT",
+                "message": "缺少点位 chat_input"}
+    if window_mode:
+        wi.post_click(pt["x"], pt["y"])
+        r = wi.post_clear()
+    else:
+        wi.mouse_click(pt["x"], pt["y"], wait_after=0.2)
+        r = wi.clear_input()
+    if not r["ok"]:
+        return r
+    return {"ok": True, "code": "OK", "message": "聊天输入框已清空"}
+
+
 def paste_text_to_chat(text: str) -> dict:
     """粘贴文本到微信聊天输入框（临时借用剪贴板，用后恢复）。"""
     text = str(text)
     if not text.strip():
         return {"ok": False, "code": "ERR_EMPTY", "message": "文本为空"}
+    r = _focus_and_clear_input(window_mode=False)
+    if not r["ok"]:
+        return r
     backup = _ClipboardBackup()
     backup.save()
     try:
@@ -243,6 +268,28 @@ def send_message(content, send=True) -> dict:
     time.sleep(0.3)
     r["message"] += "，已回车发送"
     return r
+
+
+def send_text_window(text: str, hwnd=None) -> dict:
+    """窗口级发送文本（PostMessage 投递，不依赖系统焦点；支持 Deskflow 场景）。
+
+    流程：点击聊天输入框 → 清空内容 → 输入文本 → 回车发送。
+    仅支持文本；文件粘贴依赖剪贴板+系统焦点，请使用 send_message。
+    """
+    text = str(text)
+    if not text.strip():
+        return {"ok": False, "code": "ERR_EMPTY", "message": "文本为空"}
+    r = _focus_and_clear_input(window_mode=True)
+    if not r["ok"]:
+        return r
+    r = wi.post_text(text, hwnd=hwnd)
+    if not r["ok"]:
+        return r
+    r2 = wi.post_key(wi.VK_RETURN, hwnd=hwnd)
+    if not r2["ok"]:
+        return r2
+    return {"ok": True, "code": "OK",
+            "message": f"窗口级输入 {len(text)} 字符并回车发送"}
 
 
 # ---------------------------------------------------------------------------

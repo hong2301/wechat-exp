@@ -78,7 +78,7 @@ def _check_contact_result(before_width: int) -> dict:
     return _step_ok("OK", "已点击到联系人（宽度未变 / 无额外窗口 / 无嵌入页）")
 
 
-def _cleanup_contact_fail() -> list:
+def _cleanup_contact_fail(window_mode=False) -> list:
     """未找到联系人后的收尾动作：关闭搜一搜 / 添加朋友等窗口。
 
     - 独立可见窗口（搜一搜 / 添加朋友）：直接 WM_CLOSE
@@ -87,6 +87,8 @@ def _cleanup_contact_fail() -> list:
     """
     import time as _t
     logs = []
+
+    _click = wi.post_click if window_mode else wi.mouse_click
 
     # 1) 独立可见窗口：直接关闭
     extras = ws.extra_visible_windows()
@@ -101,7 +103,7 @@ def _cleanup_contact_fail() -> list:
             logs.append("缺少点位4(search_split_button)，嵌入式搜一搜无法关闭")
         else:
             for _i in range(3):
-                wi.mouse_click(pt["x"], pt["y"], wait_after=0.8)
+                _click(pt["x"], pt["y"])
                 logs.append(f"点击搜一搜窗口分离按钮(点位4) ({pt['x']},{pt['y']})")
                 _t.sleep(0.8)
                 # 分离后可能出现独立窗口，关闭它
@@ -116,20 +118,24 @@ def _cleanup_contact_fail() -> list:
     return logs
 
 
-def _clear_search_box() -> dict:
+def _clear_search_box(window_mode=False) -> dict:
     """输入前清空搜索框（点击后 Ctrl+A + Delete）。"""
     pt = points.get_point("search_box")
     if not pt:
         return _step_fail("ERR_NO_POINT", "缺少点位 search_box")
-    wi.mouse_click(pt["x"], pt["y"], wait_after=0.2)
-    r = wi.clear_input()
+    if window_mode:
+        wi.post_click(pt["x"], pt["y"])
+        r = wi.post_clear()
+    else:
+        wi.mouse_click(pt["x"], pt["y"], wait_after=0.2)
+        r = wi.clear_input()
     if not r["ok"]:
         return _step_fail("ERR_CLEAR", f"清空搜索框失败: {r['message']}")
     return _step_ok("OK", "搜索框已清空")
 
 
 def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
-                      clear_first=True) -> dict:
+                      clear_first=True, window_mode=False) -> dict:
     """打开指定联系人的聊天窗口（任务）。
 
     流程：
@@ -162,12 +168,15 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
                           f"微信窗口初始化失败: {r['message']}")
 
     # 3) 点击搜索框（点位1），并先清空内容（避免上次残留）
-    r = _clear_search_box()
+    r = _clear_search_box(window_mode=window_mode)
     if not r["ok"]:
         return r
 
     # 4) 输入联系人
-    r = (wi.paste_text(contact) if use_paste else wi.type_text(contact))
+    if window_mode:
+        r = wi.post_text(contact)
+    else:
+        r = (wi.paste_text(contact) if use_paste else wi.type_text(contact))
     if not r["ok"]:
         return _step_fail("ERR_INPUT", f"输入联系人失败: {r['message']}")
     time.sleep(wait_search)   # 等待搜索结果出现
@@ -178,26 +187,38 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
         return _step_fail("ERR_NO_POINT",
                           "缺少点位 first_contact，请先运行点位采集")
     before_width = ws.get_window_width()   # 记录点击前主窗口宽度
-    r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.8)
-    if not r["ok"]:
-        return _step_fail("ERR_CLICK", f"点击第一联系人失败: {r['message']}")
+    if window_mode:
+        # 窗口模式：输入后第一项默认选中，直接回车打开（不按方向键）
+        r = wi.post_key(wi.VK_RETURN)
+        if not r["ok"]:
+            return _step_fail("ERR_CLICK",
+                              f"回车打开联系人失败: {r['message']}")
+    else:
+        r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.8)
+        if not r["ok"]:
+            return _step_fail("ERR_CLICK", f"点击第一联系人失败: {r['message']}")
+    time.sleep(0.8)
 
     # 5b) 校验结果：宽度变化 / 搜一搜 / 添加朋友 → 未找到联系人
     r = _check_contact_result(before_width)
     if not r["ok"]:
         # 收尾：关闭搜一搜（嵌入式先点点位4）/ 添加朋友等窗口
-        cleanup_logs = _cleanup_contact_fail()
+        cleanup_logs = _cleanup_contact_fail(window_mode=window_mode)
         r["message"] += (
             "\n    [收尾] " + "; ".join(cleanup_logs) if cleanup_logs
             else "\n    [收尾] 无需清理")
         return r
 
-    # 6) 点击聊天输入框（点位3）→ 停止
+    # 6) 点击聊天输入框（点位3）→ 停止（回到主窗口）
     pt = points.get_point("chat_input")
     if not pt:
         return _step_fail("ERR_NO_POINT",
                           "缺少点位 chat_input，请先运行点位采集")
-    r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.3)
+    if window_mode:
+        r = wi.post_click(pt["x"], pt["y"])   # 默认主窗口
+    else:
+        r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.3)
+    time.sleep(0.3)
     if not r["ok"]:
         return _step_fail("ERR_CLICK", f"点击聊天输入框失败: {r['message']}")
 
@@ -297,7 +318,8 @@ def _verify_sent_local(db_storage: str, content: str,
 
 def send_and_verify(contact: str, content: str,
                     use_paste=False, wait_search=0.8,
-                    verify_backoff=15, save_sql=5) -> dict:
+                    verify_backoff=15, save_sql=5,
+                    window_mode=False) -> dict:
     """发送消息并验证是否发送成功（完整任务）。
 
     流程：
@@ -321,15 +343,25 @@ def send_and_verify(contact: str, content: str,
         return _step_fail("ERR_NO_CONTENT", "未提供要发送的内容")
 
     # 1) 打开聊天窗口
-    r = open_contact_chat(contact, use_paste=use_paste, wait_search=wait_search)
+    r = open_contact_chat(contact, use_paste=use_paste, wait_search=wait_search,
+                          window_mode=window_mode)
     if not r["ok"]:
         return r
 
-    # 2) 粘贴并回车发送
+    # 2) 发送（窗口模式：PostMessage 直达；常规模式：剪贴板借用+回车）
     send_time = time.time()
-    r = sender.send_message(content, send=True)
-    if not r["ok"]:
-        return _step_fail("ERR_SEND", f"发送失败: {r['message']}")
+    if window_mode:
+        if isinstance(content, (list, tuple)) or \
+           (isinstance(content, str) and os.path.exists(content)):
+            return _step_fail("ERR_SEND",
+                              "窗口模式暂不支持文件发送，请用常规模式发送文件")
+        r = sender.send_text_window(content)
+        if not r["ok"]:
+            return _step_fail("ERR_SEND", f"窗口级发送失败: {r['message']}")
+    else:
+        r = sender.send_message(content, send=True)
+        if not r["ok"]:
+            return _step_fail("ERR_SEND", f"发送失败: {r['message']}")
 
     # 3) 轮询验证：发送后立即解析数据库，每秒 1 次。
     #    实测：微信 4.x 消息写入 WAL 后约 8~10s 才 checkpoint 进主库
@@ -384,6 +416,8 @@ def main():
     ap.add_argument("--content", help="要发送的内容（--send 时必填）")
     ap.add_argument("--verify", action="store_true",
                     help="发送后读取本地数据库验证是否发送成功")
+    ap.add_argument("--window", action="store_true",
+                    help="窗口级模式(PostMessage直达，不依赖系统焦点，适合Deskflow)")
     args = ap.parse_args()
 
     if args.send:
@@ -392,15 +426,18 @@ def main():
             raise SystemExit(1)
         if args.verify:
             r = send_and_verify(args.contact, args.content,
-                                use_paste=args.paste, wait_search=args.wait)
+                                use_paste=args.paste, wait_search=args.wait,
+                                window_mode=args.window)
         else:
             r = open_contact_chat(args.contact, use_paste=args.paste,
-                                  wait_search=args.wait)
+                                  wait_search=args.wait,
+                                  window_mode=args.window)
             if r["ok"]:
-                r = sender.send_message(args.content)
+                r = (sender.send_text_window(args.content)
+                     if args.window else sender.send_message(args.content))
     else:
         r = open_contact_chat(args.contact, use_paste=args.paste,
-                              wait_search=args.wait)
+                              wait_search=args.wait, window_mode=args.window)
     print("=" * 56)
     print(f"结果: {'成功' if r['ok'] else '失败'}  [错误码: {r['code']}]")
     print(f"说明: {r['message']}")

@@ -21,6 +21,8 @@ if __name__ == "__main__":
     ap.add_argument("--text", help="要发的文字")
     ap.add_argument("--file", action="append", default=[], help="要发的文件(可多个)")
     ap.add_argument("--no-enter", action="store_true", help="只粘贴不发送")
+    ap.add_argument("--window", action="store_true",
+                    help="窗口级模式(PostMessage直达,不依赖系统焦点,适合Deskflow)")
     a = ap.parse_args()
 
     if not a.text and not a.file:
@@ -28,10 +30,18 @@ if __name__ == "__main__":
                           "message": "请用 --text 或 --file 提供内容"}, ensure_ascii=False))
         sys.exit(1)
 
-    r = tasks.open_contact_chat(a.contact)
+    r = tasks.open_contact_chat(a.contact, window_mode=a.window)
     if r.get("ok"):
         if a.text:
-            r = sender.send_message(a.text, send=not a.no_enter)
+            if a.window:
+                if a.no_enter:
+                    # 窗口级只输入不发送：先清空输入框再输入
+                    sender._focus_and_clear_input(window_mode=True)
+                    r = __import__("wechat_input").post_text(a.text)
+                else:
+                    r = sender.send_text_window(a.text)
+            else:
+                r = sender.send_message(a.text, send=not a.no_enter)
         else:
             r = sender.send_message(a.file, send=not a.no_enter)
     print(json.dumps(r, ensure_ascii=False, indent=2))

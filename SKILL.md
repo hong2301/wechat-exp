@@ -45,6 +45,11 @@ python skill-scripts/wx_send.py --contact 张三 --file "C:/path/file.csv"
 # 发送 + 数据库验证（发送后轮询本地库确认消息已入库）
 python skill-scripts/wx_send_verify.py --contact 张三 --content "验证内容"
 
+# 🔑 窗口模式（Deskflow/键鼠切走也稳定）：全部消息直达微信窗口，不依赖系统焦点
+python skill-scripts/wx_open_chat.py --contact 张三 --window
+python skill-scripts/wx_send.py --contact 张三 --text "你好" --window
+python skill-scripts/wx_send_verify.py --contact 张三 --content "验证内容" --window
+
 # 本地数据库提取 / 查询（my_tools 能力）
 python skill-scripts/wx_extract.py --wxid wxid_xxx --date-from 2025-01-01 --date-to 2025-12-31
 python skill-scripts/wx_query.py --contact 张三 --date-from 2025-01-01 --date-to 2025-12-31

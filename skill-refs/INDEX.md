@@ -145,7 +145,20 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 
 ### 3.5 tasks.py — 组合任务（核心）
 
-#### `open_contact_chat(contact, use_paste=False, wait_search=0.8)` 
+> **两种操作模式**（所有任务支持 `window_mode` 参数）：
+> - **常规模式**（默认）：系统级 `SetCursorPos + mouse_event + SendInput`，需要鼠标/键盘在本机
+> - **窗口模式** `--window`：全部 `PostMessage/ SendMessage` **直达微信主窗口**，不依赖系统焦点——
+>   适合 **Deskflow / 远程键鼠切走** 的场景（实测鼠标移走仍全链路成功）
+
+窗口模式要点（重要经验）：
+- 点击搜索框/聊天输入框：窗口消息发**主窗口**，坐标按 `当前窗口尺寸/基准768×864` 等比自适应
+- 输入/清空/回车：**同步击键流**（KEYDOWN+CHAR+KEYUP）发**主窗口**（搜索框在主窗口）
+- 点击搜索框后必须补发 `WM_SETFOCUS` 让 Chromium 编辑框获得键盘焦点
+- 清空用 **End + Backspace×60**（Ctrl+A 在 Qt/Chromium 下不可靠）
+- **搜索下拉窗（Qt title='Weixin'）只做显示**：输入后第一项默认选中，
+  直接 `post_key(VK_RETURN)` 即可打开联系人（**不要按 ↓**）
+
+#### `open_contact_chat(contact, use_paste=False, wait_search=0.8, window_mode=False)` 
 
 逐步流程：
 1. 参数校验（contact 非空）
@@ -197,6 +210,21 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 | `ERR_SEND_UNVERIFIED` | 轮询未在本地库找到刚发消息 |
 | `ERR_NO_ACTIVE_DIR` / `ERR_RE_VERIFY` / `ERR_VERIFY_QUERY` | 验证链路失败 |
 
+### 3.5 补充：窗口模式（window_mode）方法
+
+`wechat_input.py` 窗口级方法（Deskflow 场景核心）：
+
+| 方法 | 说明 |
+|---|---|
+| `post_click(x, y, hwnd=None)` | 窗口内点击（自适应坐标 → 客户区 → PostMessage）|
+| `post_text(text, hwnd=None)` | 同步击键输入（KEYDOWN+CHAR+KEYUP，支持中文）|
+| `post_key(vk, hwnd=None)` | 窗口内按键（→ 主窗口）|
+| `post_clear()` | 清空输入框（End + Backspace×60）|
+| `adapt_client_pt / adapt_screen_pt` | 点位等比自适应换算 |
+| `_dropdown_window()` | 搜索下拉窗口识别（Qt 'Weixin'，仅诊断/显示用）|
+
+发送：`sender.send_text_window(text)` 窗口级发文本（清空→输入→回车）；文件发送仍走系统级。
+
 ## 5. 关键经验（防坑记录）
 
 1. **WAL checkpoint**：微信 4.x 消息先进 WAL，约 8~10s 才并入主库；读库验证必须轮询或留足时间
@@ -206,6 +234,9 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 5. **低层鼠标钩子不可靠**（本环境回调被静默丢弃），点位采集用 `GetAsyncKeyState` 轮询 + `GetCursorPos`（已实测稳定）
 6. **剪贴板借用**：备份→置入→粘贴→恢复，不影响用户日常剪贴板
 7. **微信数据合规**：仅个人数据；`points.json`/密钥配置不入库
+8. **搜索下拉是独立 Qt 窗口**（title='Weixin'）：只显示候选，不接收操作；输入/键盘全走主窗口；第一项默认选中，回车即选
+9. **Deskflow 场景**：所有自动化用窗口模式（`--window`），PostMessage 直达微信窗口，鼠标/键盘在哪台机器都无影响
+10. **窗口焦点**：窗口级点击后发 `WM_SETFOCUS`，否则 Chromium 编辑框收不到键盘消息
 
 ## 6. 演练示例
 
