@@ -10,6 +10,7 @@ wechat_status — 微信状态模块（模块①）
     get_locked_data_dirs()   检测被微信锁定的数据目录（= 真正登录中的账号）
     get_active_data_dir()    返回当前被锁定/使用中的目录（无则 None）
     is_logged_in()           是否已登录（有锁定目录 = 已登录，多级降级）
+    init_wechat_window()     微信窗口初始化：前置主窗口并移动到左半屏
     get_status()             汇总返回状态 dict
 
 检测逻辑（重要修正）：
@@ -134,6 +135,7 @@ def get_locked_data_dirs(errors: Optional[list] = None) -> dict:
     return dirs_in_use_by_wechat(errors=errors, timeout_s=1.5)
 
 
+
 def get_active_data_dir() -> Optional[str]:
     """当前被微信锁定/使用的数据目录（无则 None）。"""
     locked = get_locked_data_dirs()
@@ -218,6 +220,117 @@ def is_logged_in() -> bool:
     if _has_login_window(pids):
         return False
     return _has_main_window(pids)
+
+
+# ---------------------------------------------------------------------------
+# 窗口初始化：前置主窗口并移动到左半屏
+# ---------------------------------------------------------------------------
+SW_RESTORE = 9
+SW_SHOW = 5
+HWND_TOP = 0
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_SHOWWINDOW = 0x0040
+SWP_NOACTIVATE = 0x0010
+SPI_GETWORKAREA = 0x0030
+VK_MENU = 0x12
+
+
+def _find_main_hwnd(pids: List[int]):
+    """找微信主窗口句柄（优先可见窗口，标题含「微信」/「WeChat」）。"""
+    if not pids:
+        return None
+    wins = _wechat_windows(pids)
+    # 先可见的，再任意
+    for w in sorted(wins, key=lambda x: not x[2]):
+        t = w[1].strip().lower()
+        if any(k in t for k in _MAIN_KEYWORDS):
+            return w[0]
+    return None
+
+
+def _force_foreground(hwnd):
+    """绕过 Windows 前台锁定，把窗口强制带到最顶层。"""
+    import time
+    u32 = _user32()
+    u32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    # 按住再松开 Alt，规避前台锁定限制
+    _keybd_event(VK_MENU, 0, 0, 0)
+    _keybd_event(VK_MENU, 0, 2, 0)  # KEYEVENTF_KEYUP
+    u32.SetForegroundWindow(hwnd)
+    u32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    time.sleep(0.15)
+
+
+def _keybd_event(vk, scancode, flags, extra):
+    """模拟按键（绕过前台锁定需要）。"""
+    ctypes.windll.user32.keybd_event(vk, scancode, flags, extra)
+
+
+def _work_area() -> Optional[Tuple[int, int, int, int]]:
+    """系统工作区（不含任务栏）: (x1, y1, x2, y2)。"""
+    r = wt.RECT()
+    ok = _user32().SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(r), 0)
+    if not ok:
+        return None
+    return (r.left, r.top, r.right, r.bottom)
+
+
+def _move_to_left_half(hwnd) -> bool:
+    """把窗口移动到左半屏（尺寸 = 工作区一半宽 × 满高）。"""
+    import time
+    u32 = _user32()
+    area = _work_area()
+    if not area:
+        return False
+    x1, y1, x2, y2 = area
+    w, h = (x2 - x1) // 2, y2 - y1
+    u32.ShowWindow(hwnd, SW_RESTORE)
+    time.sleep(0.1)
+    u32.SetWindowPos(hwnd, HWND_TOP, x1, y1, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE)
+    time.sleep(0.2)
+    # 复查未生效则重试一次（部分窗口拒绝首次移动）
+    rect = wt.RECT()
+    u32.GetWindowRect(hwnd, ctypes.byref(rect))
+    if abs(rect.left - x1) > 2 or abs(rect.top - y1) > 2:
+        u32.SetWindowPos(hwnd, HWND_TOP, x1, y1, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE)
+        time.sleep(0.2)
+    return True
+
+
+def init_wechat_window() -> dict:
+    """微信窗口初始化：前置微信主窗口并移动到左半屏。
+
+    返回: {"ok": bool, "code": str, "message": str}
+        code: OK / ERR_NO_WECHAT / ERR_NO_MAIN_WINDOW / ERR_MOVE_FAILED
+    """
+    pids = _wechat_pids()
+    if not pids:
+        return {"ok": False, "code": "ERR_NO_WECHAT", "message": "微信未运行"}
+    hwnd = _find_main_hwnd(pids)
+    if not hwnd:
+        return {"ok": False, "code": "ERR_NO_MAIN_WINDOW",
+                "message": "未找到微信主窗口（可能尚未打开主界面）"}
+    try:
+        # 唤出（恢复/显示）并前置
+        u32 = _user32()
+        u32.ShowWindow(hwnd, SW_RESTORE)
+        import time
+        time.sleep(0.1)
+        u32.ShowWindow(hwnd, SW_SHOW)
+        time.sleep(0.1)
+        _force_foreground(hwnd)
+        # 移动到左半屏
+        if not _move_to_left_half(hwnd):
+            return {"ok": False, "code": "ERR_MOVE_FAILED",
+                    "message": "获取工作区失败，无法移动窗口"}
+        _force_foreground(hwnd)
+        return {"ok": True, "code": "OK", "message": "微信窗口已前置并移动到左半屏"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_INTERNAL",
+                "message": f"窗口初始化异常: {type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------------------

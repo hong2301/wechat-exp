@@ -38,5 +38,9 @@ my_automation/
 | 方法 | 说明 |
 |---|---|
 | `is_wechat_running()` | 检测微信进程是否在运行 |
-| `is_logged_in()` | 检测微信是否已登录（主窗口存在 / 登录窗判断） |
+| `is_logged_in()` | 检测微信是否已登录（数据目录锁定判定，多级降级） |
+| `get_data_dirs()` | 检测本机全部微信数据目录（按 wxid 去重） |
+| `get_locked_data_dirs()` | 检测被微信锁定的目录（= 登录中的账号目录） |
+| `get_active_data_dir()` | 当前被锁定/使用中的目录（无则 None） |
+| `init_wechat_window()` | 窗口初始化：前置主窗口并移动到左半屏 |
 | `get_status()` | 汇总返回状态 dict |
