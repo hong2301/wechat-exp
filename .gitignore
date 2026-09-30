@@ -1,0 +1,15 @@
+# ---- 敏感：数据库解密密钥，绝不提交 ----
+.wechat_exp_config.json
+
+# ---- 运行产物 ----
+my_output/
+backup/
+export/
+output/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.pyc
+build/
+dist/
