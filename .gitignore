@@ -18,3 +18,5 @@ build/
 dist/
 # ---- pi 环境配置（本机专属，不推送）----
 .pi/
+# 已回复消息状态
+auto_reply_state.json
