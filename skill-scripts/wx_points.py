@@ -8,9 +8,14 @@ import os
 import subprocess
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 target = os.path.join(REPO, "my_automation", "points.py")
 
 if __name__ == "__main__":
     args = list(sys.argv[1:]) if len(sys.argv) > 1 else ["show"]
-    sys.exit(subprocess.call([sys.executable, target] + args))
+    sys.exit(subprocess.call([sys.executable, "-X", "utf8", target] + args))

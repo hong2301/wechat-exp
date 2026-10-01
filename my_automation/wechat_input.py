@@ -314,7 +314,10 @@ def mouse_click(x, y, hold_ms=80, wait_after=0):
     """
     try:
         u32 = _user32()
-        sx, sy = adapt_screen_pt(int(x), int(y))   # 点位自适应（窗口尺寸变化时仍准）
+        # 点位为采集时的真实屏幕坐标。open_chat 流程每次先 init_wechat_window
+        # 把窗口摆回采集时的左半屏布局，直接用原始坐标最准。
+        # （旧版按固定基准 768×864 等比缩放，本机 640px 半屏下 113→94 点偏）
+        sx, sy = int(x), int(y)
         u32.SetCursorPos(sx, sy)
         time.sleep(0.05)
         u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
@@ -376,19 +379,41 @@ def type_text(text, char_delay=0.01):
 
 
 def ctrl_key(letter):
-    """发送 Ctrl+字母 组合键。"""
-    vk = ord(str(letter).upper())
-    _send_keys([(VK_CONTROL, 0, 0),
-                (vk, 0, 0),
-                (vk, 0, KEYEVENTF_KEYUP),
-                (VK_CONTROL, 0, KEYEVENTF_KEYUP)])
-    time.sleep(0.1)
+    """发送 Ctrl+字母 组合键。
+
+    返回: {"ok", "code", "message"}
+    """
+    try:
+        vk = ord(str(letter).upper())
+        sent = _send_keys([(VK_CONTROL, 0, 0),
+                           (vk, 0, 0),
+                           (vk, 0, KEYEVENTF_KEYUP),
+                           (VK_CONTROL, 0, KEYEVENTF_KEYUP)])
+        time.sleep(0.1)
+        if sent != 4:
+            return {"ok": False, "code": "ERR_SENDINPUT",
+                    "message": f"SendInput 部分发送 ({sent}/4)"}
+        return {"ok": True, "code": "OK", "message": f"已发送 Ctrl+{str(letter).upper()}"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_INPUT",
+                "message": f"组合键失败: {type(e).__name__}: {e}"}
 
 
 def key_press(vk):
-    """发送单键（如回车 VK_RETURN=0x0D）。"""
-    _send_keys([(vk, 0, 0), (vk, 0, KEYEVENTF_KEYUP)])
-    time.sleep(0.1)
+    """发送单键（如回车 VK_RETURN=0x0D）。
+
+    返回: {"ok", "code", "message"}
+    """
+    try:
+        sent = _send_keys([(vk, 0, 0), (vk, 0, KEYEVENTF_KEYUP)])
+        time.sleep(0.1)
+        if sent != 2:
+            return {"ok": False, "code": "ERR_SENDINPUT",
+                    "message": f"SendInput 部分发送 ({sent}/2)"}
+        return {"ok": True, "code": "OK", "message": f"已发送按键 VK=0x{vk:x}"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_INPUT",
+                "message": f"按键失败: {type(e).__name__}: {e}"}
 
 
 def clear_input():

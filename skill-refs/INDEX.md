@@ -1,6 +1,6 @@
 # 微信数据技能 · 完整索引
 
-> REPO = `C:/Users/86150/Desktop/微信数据/wechat-exp`
+> REPO = `C:/Users/28910/Desktop/wechat-exp`
 > 本索引是技能唯一权威参考：模块地图、方法签名、组合流程、CLI、错误码、经验教训。
 
 ---
@@ -244,7 +244,7 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 python skill-scripts/wx_status.py
 
 # 发送文件给联系人
-python skill-scripts/wx_send.py --contact hahahahahahahaha87 --file "C:/Users/86150/Desktop/548待补清单.csv"
+python skill-scripts/wx_send.py --contact <联系人> --file "C:/Users/28910/Desktop/示例文件.csv"
 
 # 发送并验证
 python skill-scripts/wx_send_verify.py --contact 张三 --content "重要通知"

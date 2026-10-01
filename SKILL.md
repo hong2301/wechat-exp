@@ -4,7 +4,7 @@ description: 微信数据技能。处理本机微信的业务：读取/导出本
 license: proprietary
 metadata:
   repo: https://github.com/hong2301/wechat-exp
-  base: C:/Users/86150/Desktop/微信数据/wechat-exp
+  base: C:/Users/28910/Desktop/wechat-exp
 ---
 
 # 微信数据（WeChat Data）
@@ -16,7 +16,7 @@ metadata:
 
 ## 仓库位置
 
-`C:/Users/86150/Desktop/微信数据/wechat-exp`（下文用 `REPO` 指代）。
+`C:/Users/28910/Desktop/wechat-exp`（下文用 `REPO` 指代）。
 所有脚本用绝对路径调用，仓库路径变更时同步修改脚本与本文档。
 
 ## 快速开始（脚本方式）

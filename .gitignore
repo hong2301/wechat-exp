@@ -16,3 +16,5 @@ __pycache__/
 *.pyc
 build/
 dist/
+# ---- pi 环境配置（本机专属，不推送）----
+.pi/

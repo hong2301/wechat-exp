@@ -7,6 +7,11 @@ import json
 import os
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "my_automation"))
 sys.path.insert(0, os.path.join(REPO, "src"))
