@@ -209,6 +209,29 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 | `ERR_SEND_UNVERIFIED` | 轮询未在本地库找到刚发消息 |
 | `ERR_NO_ACTIVE_DIR` / `ERR_RE_VERIFY` / `ERR_VERIFY_QUERY` | 验证链路失败 |
 
+### 3.5 补充：AI 自动回复（context 多轮）
+
+`auto_reply.py`：监控新消息 → 构建上下文 → GLM 生成 → 发送回复。
+
+| 方法 | 说明 |
+|---|---|
+| `auto_reply(...)` | 组合任务：interval / only_contact / cooldown / dry_run / history_limit / extra_contacts |
+| `_build_context(mon, sender, content, sys, history_limit, extra_contacts)` | 多轮 messages（对方=user，我方=assistant；extra_contacts 额外附加其他联系人消息）|
+| `_generate_reply_ctx(mon, sender, content, ...)` | 带上下文调用 `ai.chat(messages)` |
+
+`monitor.MessageMonitor.load_history_for(sender_id, limit)`：按 real_sender_id 拉历史（上下文数据源）。
+
+**AI 模块**（`ai/`，来自 Z 盘头歌闯关王，已适配独立运行）：
+- `ai.ask(prompt, provider='glm')` / `ai.chat(messages, provider='glm')`（支持多轮+system）
+- 密钥：`config.json` 的 `GLM_API_KEYS`（已 gitignore，不入库）
+- 错误分类+自动重试（quota/rate_limit/network/server/auth）
+
+```bash
+python my_automation/auto_reply.py --dry-run --seconds 60          # 只生成不发送
+python my_automation/auto_reply.py --seconds 3600 --only 关键词     # 持续自动回复
+python my_automation/auto_reply.py --extra wxid_a --extra wxid_b    # 附加上下文联系人
+```
+
 ### 3.5 补充：窗口模式（window_mode）方法
 
 `wechat_input.py` 窗口级方法（Deskflow 场景核心）：
@@ -236,6 +259,8 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 8. **搜索下拉是独立 Qt 窗口**（title='Weixin'）：只显示候选，不接收操作；输入/键盘全走主窗口；第一项默认选中，回车即选
 9. **Deskflow 场景**：所有自动化用窗口模式（`--window`），PostMessage 直达微信窗口，鼠标/键盘在哪台机器都无影响
 10. **窗口焦点**：窗口级点击后发 `WM_SETFOCUS`，否则 Chromium 编辑框收不到键盘消息
+11. **消息库内容**：当前 message_0.db 只含近期消息（WAL checkpoint 节奏），历史消息可能不在主库；AI 上下文以库内已有内容为准
+12. **上下文角色**：对方消息=user、我方=assistant；extra_contacts 用 system 角色注入参考，不打断主对话
 
 ## 6. 演练示例
 

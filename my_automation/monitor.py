@@ -126,6 +126,50 @@ class MessageMonitor:
         }
 
     # ------------------------------------------------------------------
+    def load_history_for(self, sender_id, limit=10, before_ts=None):
+        """拉取某发送者的最近历史消息（含我/对方），升序返回。
+
+        用于 AI 上下文构建（多轮对话）。sender_id 为消息里的 real_sender_id。
+        """
+        if not self.src or not self.key:
+            return []
+        tmp = tempfile.mktemp(suffix='.db')
+        try:
+            decrypt_database(self.src, tmp, self.key)
+            conn = sqlite3.connect(tmp)
+            try:
+                tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name LIKE 'Msg_%'")]
+                cond = "real_sender_id = ?"
+                params = [sender_id]
+                if before_ts:
+                    cond += " AND create_time < ?"
+                    params.append(int(before_ts))
+                rows = []
+                for tbl in tables:
+                    try:
+                        rows += conn.execute(
+                            f"SELECT local_id, local_type, real_sender_id, "
+                            f"create_time, origin_source, message_content "
+                            f"FROM [{tbl}] WHERE {cond} "
+                            f"ORDER BY create_time DESC LIMIT {limit}",
+                            params).fetchall()
+                    except sqlite3.Error:
+                        continue
+                rows.sort(key=lambda r: r[3] or 0)
+                return [self._format(r) for r in rows[:limit]]
+            finally:
+                conn.close()
+        except Exception:
+            return []
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    # ------------------------------------------------------------------
     def baseline(self) -> int:
         """初始基准：记录当前库内**最新**消息时间，作为"已见"起点。
 
