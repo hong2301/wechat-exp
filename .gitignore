@@ -20,3 +20,4 @@ dist/
 .pi/
 # 已回复消息状态
 auto_reply_state.json
+config.json
