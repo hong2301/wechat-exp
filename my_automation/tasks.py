@@ -143,7 +143,7 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
         2. 初始化微信窗口（前置 + 左半屏）
         3. 点击点位1 search_box（搜索框）
         4. 输入联系人名称
-        5. 等待搜索结果 → 点击点位2 first_contact（第一联系人）
+        5. 输入后回车打开第一联系人（第一项默认选中，无需点位2）
         6. 点击点位3 chat_input（聊天输入框）→ 停止
 
     参数：
@@ -181,22 +181,15 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
         return _step_fail("ERR_INPUT", f"输入联系人失败: {r['message']}")
     time.sleep(wait_search)   # 等待搜索结果出现
 
-    # 5) 点击第一联系人（点位2）
-    pt = points.get_point("first_contact")
-    if not pt:
-        return _step_fail("ERR_NO_POINT",
-                          "缺少点位 first_contact，请先运行点位采集")
-    before_width = ws.get_window_width()   # 记录点击前主窗口宽度
+    # 5) 打开第一联系人：输入后第一项默认选中，直接回车（无需点位2）
+    before_width = ws.get_window_width()   # 记录回车前主窗口宽度
     if window_mode:
-        # 窗口模式：输入后第一项默认选中，直接回车打开（不按方向键）
-        r = wi.post_key(wi.VK_RETURN)
-        if not r["ok"]:
-            return _step_fail("ERR_CLICK",
-                              f"回车打开联系人失败: {r['message']}")
+        r = wi.post_key(wi.VK_RETURN)      # 窗口级回车
     else:
-        r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.8)
-        if not r["ok"]:
-            return _step_fail("ERR_CLICK", f"点击第一联系人失败: {r['message']}")
+        r = wi.key_press(wi.VK_RETURN)     # 系统级回车
+    if not r["ok"]:
+        return _step_fail("ERR_CLICK",
+                          f"回车打开联系人失败: {r['message']}")
     time.sleep(0.8)
 
     # 5b) 校验结果：宽度变化 / 搜一搜 / 添加朋友 → 未找到联系人

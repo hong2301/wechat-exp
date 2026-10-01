@@ -48,7 +48,7 @@ my_automation/
 
 ### points.py — 点位模块
 
-点位：`search_box`（搜索框）/ `first_contact`（第一联系人）/ `chat_input`（聊天输入框），存储于 `points.json`（已 gitignore）。
+点位：`search_box`（搜索框）/ `chat_input`（聊天输入框）/ `search_split_button`（搜一搜窗口分离按钮），存储于 `points.json`（已 gitignore）。第一联系人无需点位（输入后回车默认选中第一项）。
 
 | 方法 | 说明 |
 |---|---|

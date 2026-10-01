@@ -103,7 +103,6 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 | name | 中文 |
 |---|---|
 | `search_box` | 搜索框 |
-| `first_contact` | 第一联系人 |
 | `chat_input` | 聊天输入框 |
 | `search_split_button` | 搜一搜窗口分离按钮 |
 

@@ -6,7 +6,6 @@ points — 点位模块（微信界面坐标配置）
 
 点位清单：
     search_box      搜索框
-    first_contact   第一联系人（搜索结果第一条）
     chat_input      聊天输入框
 
 方法：
@@ -38,9 +37,9 @@ import time
 POINTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'points.json')
 
 # 点位清单（顺序即采集顺序）
+# 注：第一联系人不再需要点位——微信搜索后第一项默认选中，直接回车即可打开
 POINT_NAMES = {
     'search_box': '搜索框',
-    'first_contact': '第一联系人',
     'chat_input': '聊天输入框',
     'search_split_button': '搜一搜窗口分离按钮',
 }
