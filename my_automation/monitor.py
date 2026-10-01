@@ -24,6 +24,11 @@ import sys
 import tempfile
 import time
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 _SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
@@ -54,7 +59,11 @@ class MessageMonitor:
 
     # ------------------------------------------------------------------
     def _fetch_new(self, max_rows=200):
-        """解密并扫描 create_time > last_ts 的新消息。返回消息列表（升序）。"""
+        """解密并扫描 create_time > last_ts 的新消息。返回消息列表（升序）。
+
+        每表按时间**降序**取最新 max_rows 条再合并，避免升序+LIMIT 截断
+        只留下最旧的记录（首轮会把整库历史当作"新消息"）。
+        """
         if not self.src or not self.key:
             return []
         tmp = tempfile.mktemp(suffix='.db')
@@ -72,7 +81,7 @@ class MessageMonitor:
                             f"SELECT local_id, local_type, real_sender_id, "
                             f"create_time, origin_source, message_content "
                             f"FROM [{tbl}] WHERE create_time > ? "
-                            f"ORDER BY create_time ASC LIMIT {max_rows}",
+                            f"ORDER BY create_time DESC LIMIT {max_rows}",
                             (self.last_ts,)).fetchall()
                     except sqlite3.Error:
                         continue
@@ -118,10 +127,39 @@ class MessageMonitor:
 
     # ------------------------------------------------------------------
     def baseline(self) -> int:
-        """初始基准：记录当前库内最新消息时间，作为“已见”起点。"""
-        rows = self._fetch_new()
-        if rows:
-            self.last_ts = max(r[3] or 0 for r in rows)
+        """初始基准：记录当前库内**最新**消息时间，作为"已见"起点。
+
+        直接对每个 Msg_ 表取 MAX(create_time)，不再依赖被 LIMIT 截断
+        的样本（旧实现取最早 200 条中的最大值，基线过旧导致首轮
+        把整库历史当"新消息"轰出）。
+        """
+        if not self.src or not self.key:
+            return 0
+        tmp = tempfile.mktemp(suffix='.db')
+        try:
+            decrypt_database(self.src, tmp, self.key)
+            conn = sqlite3.connect(tmp)
+            try:
+                mx = 0
+                for r in conn.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name LIKE 'Msg_%'"):
+                    try:
+                        v = conn.execute(
+                            f"SELECT MAX(create_time) FROM [{r[0]}]").fetchone()[0]
+                        mx = max(mx, v or 0)
+                    except sqlite3.Error:
+                        continue
+                self.last_ts = mx
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
         return self.last_ts
 
     # ------------------------------------------------------------------
