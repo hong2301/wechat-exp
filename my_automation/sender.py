@@ -383,17 +383,21 @@ def _find_dialog_child(dialog, want_class=None, want_id=None,
     return found[0] if found else None
 
 
-def send_file_via_picker(path: str, hwnd=None, wait_picker=3.0) -> dict:
+def send_file_via_picker(path: str, hwnd=None, wait_picker=5.0,
+                         verbose=True) -> dict:
     """通过「文件按钮」+ 文件选择对话框发送文件（全窗口消息，不碰剪贴板）。
 
-    流程（Deskflow 友好、不影响其它电脑）：
-        1. 窗口级点击「文件按钮」点位
-        2. 等待「选择文件」对话框（#32770）
-        3. 向路径栏 Edit 控件 WM_SETTEXT 写入完整路径
-        4. 向「打开」按钮 BM_CLICK（选中文件，对话框关闭）
-        5. 回微信主窗口回车发送
+    要点（实测）：
+      - 对话框：#32770 标题「选择文件」，属微信进程
+      - 路径栏：标准 Win32 Edit 控件（id=1148）→ 必须用 WM_SETTEXT
+        （Win32 Edit 无输入焦点时不处理 WM_CHAR，与 Chromium 的 WM_CHAR 不同）
+      - 「打开」：Button id=1，用 BM_CLICK
     """
-    path = str(path)
+    def log(m):
+        if verbose:
+            print(f"      {m}")
+
+    path = os.path.normpath(os.path.abspath(str(path)))
     if not os.path.exists(path):
         return {"ok": False, "code": "ERR_NO_FILE", "message": f"文件不存在: {path}"}
     if hwnd is None:
@@ -408,57 +412,91 @@ def send_file_via_picker(path: str, hwnd=None, wait_picker=3.0) -> dict:
         return {"ok": False, "code": "ERR_NO_POINT",
                 "message": "缺少点位 file_button（请先采集）"}
 
-    before = {h for h, _t, _c, v in _enum_top_windows() if v}
+    u32 = _user32()
+    u32.SendMessageW.restype = ctypes.c_ssize_t
+    u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t,
+                                 ctypes.c_ssize_t]
+
+    def _addr(obj):
+        """取 ctypes 对象的内存地址（int），供 LPARAM 传递。"""
+        return ctypes.cast(obj, ctypes.c_void_p).value or 0
+
+    def _read_text(h):
+        buf = ctypes.create_unicode_buffer(1024)
+        u32.SendMessageW(h, 0x000D, 1024, _addr(buf))   # WM_GETTEXT
+        return buf.value
+
     # 1) 点击文件按钮
+    before = {h for h, _t, _c, v in _enum_top_windows() if v}
     wi.post_click(pt['x'], pt['y'])
+    log(f"点击文件按钮 ({pt['x']},{pt['y']})")
 
     # 2) 等待「选择文件」对话框
     dialog = None
     deadline = time.time() + wait_picker
     while time.time() < deadline:
         time.sleep(0.3)
-        for h, t, c, v in _enum_top_windows():
-            if not v or h in before:
-                continue
-            if c == '#32770' and ('选择文件' in t or '打开' in t or 'Open' in t
-                                  or 'Select' in t or t == ''):
-                dialog = h
-                break
-            if c == '#32770':
-                dialog = h
-                break
-        if dialog:
+        cands = [w for w in _enum_top_windows()
+                 if w[3] and w[0] not in before and w[2] == '#32770']
+        if cands:
+            # 优先标题含“选择文件/打开”
+            pref = [w for w in cands
+                    if '选择文件' in w[1] or '打开' in w[1] or 'Open' in w[1]]
+            dialog = (pref or cands)[0][0]
+            log(f"对话框: {hex(dialog)} {pref[0][1]!r}" if pref else f"对话框: {hex(dialog)}")
             break
     if not dialog:
         return {"ok": False, "code": "ERR_NO_PICKER",
                 "message": "文件选择对话框未出现"}
-    time.sleep(0.5)
+    time.sleep(0.6)
 
-    # 3) 路径写入 Edit 控件
-    u32 = _user32()
-    u32.SendMessageW.restype = ctypes.c_ssize_t
-    u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t, ctypes.c_void_p]
-    edit = (_find_dialog_child(dialog, want_id=1148, visible_only=True)
-            or _find_dialog_child(dialog, want_class='Edit', visible_only=True))
+    # 3) 找 Edit 控件（轮询）
+    edit = None
+    deadline2 = time.time() + 4.0
+    while time.time() < deadline2:
+        edit = (_find_dialog_child(dialog, want_id=1148, visible_only=True)
+                or _find_dialog_child(dialog, want_class='Edit', visible_only=True))
+        if edit:
+            break
+        time.sleep(0.3)
     if not edit:
         return {"ok": False, "code": "ERR_NO_EDIT",
                 "message": "对话框内未找到路径输入框"}
-    u32.SendMessageW(edit, 0x000C, 0, ctypes.c_wchar_p(path))   # WM_SETTEXT
-    time.sleep(0.3)
+    log(f"路径栏: {hex(edit)}")
 
-    # 4) 点击「打开」按钮
-    btn = (_find_dialog_child(dialog, want_id=1, visible_only=True)
-           or _find_dialog_child(dialog, want_class='Button',
-                                 want_text_contains='打开', visible_only=True)
-           or _find_dialog_child(dialog, want_class='Button',
-                                 want_text_contains='打开'))
+    # 4) WM_SETTEXT 写入 + 读回校验（最多 3 次）
+    written = False
+    for i in range(3):
+        cbuf = ctypes.create_unicode_buffer(path)
+        u32.SendMessageW(edit, 0x000C, 0, _addr(cbuf))  # WM_SETTEXT
+        time.sleep(0.35)
+        got = _read_text(edit)
+        log(f"写入尝试{i+1}: 读回 {got[:70]!r}")
+        if got.strip() == path:
+            written = True
+            break
+    if not written:
+        return {"ok": False, "code": "ERR_SET_PATH",
+                "message": f"路径未写入对话框（读回: {_read_text(edit)[:60]!r}）"}
+
+    # 5) 点「打开」（轮询）
+    btn = None
+    deadline3 = time.time() + 2.0
+    while time.time() < deadline3:
+        btn = (_find_dialog_child(dialog, want_id=1, visible_only=True)
+               or _find_dialog_child(dialog, want_class='Button',
+                                     want_text_contains='打开', visible_only=True))
+        if btn:
+            break
+        time.sleep(0.2)
     if not btn:
         return {"ok": False, "code": "ERR_NO_BUTTON",
                 "message": "对话框内未找到「打开」按钮"}
     u32.SendMessageW(btn, 0x00F5, 0, 0)   # BM_CLICK
+    log(f"点击打开按钮 {hex(btn)}")
     time.sleep(1.5)
 
-    # 5) 微信窗口回车发送
+    # 6) 回微信回车发送
     r = wi.post_key(wi.VK_RETURN, hwnd=hwnd)
     if not r["ok"]:
         return r
