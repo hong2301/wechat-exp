@@ -135,7 +135,7 @@ def _clear_search_box(window_mode=False) -> dict:
 
 
 def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
-                      clear_first=True, window_mode=False) -> dict:
+                      clear_first=True, window_mode=True) -> dict:
     """打开指定联系人的聊天窗口（任务）。
 
     流程：
@@ -312,7 +312,7 @@ def _verify_sent_local(db_storage: str, content: str,
 def send_and_verify(contact: str, content: str,
                     use_paste=False, wait_search=0.8,
                     verify_backoff=15, save_sql=5,
-                    window_mode=False) -> dict:
+                    window_mode=True) -> dict:
     """发送消息并验证是否发送成功（完整任务）。
 
     流程：

@@ -247,7 +247,7 @@ def _paste_from_clipboard():
 # ---------------------------------------------------------------------------
 # 对外方法
 # ---------------------------------------------------------------------------
-def _focus_and_clear_input(window_mode=False) -> dict:
+def _focus_and_clear_input(window_mode=True) -> dict:
     """点击聊天输入框并清空内容（每次输入前调用）。
 
     系统级：mouse_click(chat_input) + Ctrl+A+Delete
@@ -274,7 +274,7 @@ def paste_text_to_chat(text: str) -> dict:
     text = str(text)
     if not text.strip():
         return {"ok": False, "code": "ERR_EMPTY", "message": "文本为空"}
-    r = _focus_and_clear_input(window_mode=False)
+    r = _focus_and_clear_input(window_mode=True)
     if not r["ok"]:
         return r
     backup = _ClipboardBackup()

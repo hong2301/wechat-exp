@@ -458,15 +458,25 @@ def _force_foreground(hwnd):
     """绕过 Windows 前台锁定，把窗口强制带到最顶层。"""
     import time
     u32 = _user32()
+    # 不使用按键注入（Alt 会被 Deskflow 同步到其它电脑）！
+    # 改为 AttachThreadInput 法：附加到当前前台线程后 SetForegroundWindow 才被允许。
     u32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-    # 按住再松开 Alt，规避前台锁定限制（finally 兜底释放，防 Alt 卡住）
     try:
-        _keybd_event(VK_MENU, 0, 0, 0)
-        _keybd_event(VK_MENU, 0, 2, 0)  # KEYEVENTF_KEYUP
-        u32.SetForegroundWindow(hwnd)
-    finally:
-        _keybd_event(VK_MENU, 0, 2, 0)  # 保险再抬一次
-        time.sleep(0.05)
+        k32 = _kernel32()
+        fg = u32.GetForegroundWindow()
+        cur_thread = k32.GetCurrentThreadId()
+        fg_thread = u32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = False
+        if fg_thread and fg_thread != cur_thread:
+            attached = bool(u32.AttachThreadInput(cur_thread, fg_thread, True))
+        try:
+            u32.SetForegroundWindow(hwnd)
+            u32.BringWindowToTop(hwnd)
+        finally:
+            if attached:
+                u32.AttachThreadInput(cur_thread, fg_thread, False)
+    except Exception:
+        pass
     u32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
     time.sleep(0.15)
 
@@ -528,7 +538,9 @@ def init_wechat_window() -> dict:
             pt = points.get_point("search_split_button")
             if pt:
                 for _i in range(2):
-                    wechat_input.mouse_click(pt["x"], pt["y"], wait_after=0.8)
+                    # 窗口级点击（不碰系统鼠标，Deskflow 不受影响）
+                    wechat_input.post_click(pt["x"], pt["y"])
+                    time.sleep(0.8)
                     if not has_embedded_page():
                         break
         except Exception:

@@ -22,10 +22,12 @@ if __name__ == "__main__":
     ap.add_argument("--contact", required=True, help="联系人名称/关键词")
     ap.add_argument("--paste", action="store_true", help="用剪贴板粘贴输入")
     ap.add_argument("--wait", type=float, default=0.8, help="搜索等待秒数")
+    ap.add_argument("--system", action="store_true",
+                    help="使用系统级操作(默认窗口级)")
     ap.add_argument("--window", action="store_true",
                     help="窗口级模式(PostMessage直达,不依赖系统焦点,适合Deskflow)")
     a = ap.parse_args()
     r = tasks.open_contact_chat(a.contact, use_paste=a.paste, wait_search=a.wait,
-                                window_mode=a.window)
+                                window_mode=not getattr(a, "system", False))
     print(json.dumps(r, ensure_ascii=False, indent=2))
     sys.exit(0 if r.get("ok") else 1)

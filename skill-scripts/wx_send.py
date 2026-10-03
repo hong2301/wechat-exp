@@ -37,18 +37,17 @@ if __name__ == "__main__":
                           "message": "请用 --text 或 --file 提供内容"}, ensure_ascii=False))
         sys.exit(1)
 
-    r = tasks.open_contact_chat(a.contact, window_mode=a.window)
+    r = tasks.open_contact_chat(a.contact, window_mode=not getattr(a, "system", False))
     if r.get("ok"):
         if a.text:
-            if a.window:
-                if a.no_enter:
-                    # 窗口级只输入不发送：先清空输入框再输入
-                    sender._focus_and_clear_input(window_mode=True)
-                    r = __import__("wechat_input").post_text(a.text)
-                else:
-                    r = sender.send_text_window(a.text)
-            else:
+            # 文本默认窗口级（WM_CHAR，不碰剪贴板）；--system 才走剪贴板粘贴
+            if a.system:
                 r = sender.send_message(a.text, send=not a.no_enter)
+            elif a.no_enter:
+                sender._focus_and_clear_input(window_mode=True)
+                r = __import__("wechat_input").post_text(a.text)
+            else:
+                r = sender.send_text_window(a.text)
         else:
             # 文件发送默认走窗口级（文件按钮+对话框，纯模拟输入，不碰剪贴板）；
             # 仅当显式 --system 时才用系统级剪贴板粘贴
