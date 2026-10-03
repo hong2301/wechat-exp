@@ -280,6 +280,12 @@ python my_automation/auto_reply.py --extra wxid_a --extra wxid_b    # 附加上�
 17. **Win32 Edit 必须 WM_SETTEXT**：标准控件无输入焦点时不处理 WM_CHAR（与 Chromium 相反）；WM_SETTEXT 后**读回校验**（WM_GETTEXT）并重试，中文/长路径才稳
 18. **指针参数**：ctypes 给 `LPARAM` 传字符串/缓冲区要转 int 地址 `ctypes.cast(obj, c_void_p).value`（argtypes 用 c_ssize_t）
 19. **路径规范化**：发送前 `os.path.normpath(os.path.abspath(p))` → Windows 反斜杠形式
+20. **Deskflow 环境铁律：全链路必须窗口级**（重要教训）——只要有一个环节走系统级，就会**穿透到其它电脑**：
+    - `open_contact_chat(window_mode=True)` 必须为 True（否则 `mouse_click`→SetCursorPos 移动系统鼠标、`type_text`/`ctrl_key` 注入键盘）
+    - `init_wechat_window` 内部关闭嵌入页必须用 `post_click`（不要 `mouse_click`）
+    - `_force_foreground` **禁止注入 Alt 键**（Deskflow 会同步 Alt → 其它电脑卡键）；改用 `AttachThreadInput + SetForegroundWindow`
+    - 现象对照：鼠标乱动=系统级 SetCursorPos；Ctrl/Alt 卡住=系统级组合键注入；回车打到其它电脑=系统级 SendInput Enter（可能触发桌面全选等操作）
+    - 默认值约定：`wx_send/wx_open_chat/wx_send_verify` 默认窗口级，系统级需显式 `--system`
 
 ## 6. 演练示例
 
