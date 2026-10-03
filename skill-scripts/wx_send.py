@@ -26,6 +26,8 @@ if __name__ == "__main__":
     ap.add_argument("--text", help="要发的文字")
     ap.add_argument("--file", action="append", default=[], help="要发的文件(可多个)")
     ap.add_argument("--no-enter", action="store_true", help="只粘贴不发送")
+    ap.add_argument("--system", action="store_true",
+                    help="文件发送用系统级剪贴板粘贴（默认窗口级文件按钮）")
     ap.add_argument("--window", action="store_true",
                     help="窗口级模式(PostMessage直达,不依赖系统焦点,适合Deskflow)")
     a = ap.parse_args()
@@ -48,14 +50,15 @@ if __name__ == "__main__":
             else:
                 r = sender.send_message(a.text, send=not a.no_enter)
         else:
-            if a.window:
-                # 窗口级文件发送：文件按钮 → 对话框 → 全窗口消息（不碰剪贴板）
+            # 文件发送默认走窗口级（文件按钮+对话框，纯模拟输入，不碰剪贴板）；
+            # 仅当显式 --system 时才用系统级剪贴板粘贴
+            if getattr(a, 'system', False):
+                r = sender.send_message(a.file, send=not a.no_enter)
+            else:
                 files = a.file if isinstance(a.file, list) else [a.file]
                 for f in files:
                     r = sender.send_file_via_picker(f)
                     if not r.get('ok'):
                         break
-            else:
-                r = sender.send_message(a.file, send=not a.no_enter)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     sys.exit(0 if r.get("ok") else 1)

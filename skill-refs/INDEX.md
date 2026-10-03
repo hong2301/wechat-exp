@@ -137,8 +137,8 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 
 | 通道 | 实现 | 剪贴板 | Deskflow | 其他电脑 |
 |---|---|---|---|---|
-| **窗口级（推荐）** | `send_file_via_picker()`：点`file_button`点位 → 等「选择文件」对话框(#32770) → 轮询找路径栏 `Edit id=1148` → **WM_SETTEXT + 读回校验(3次重试)** → 轮询找 `Button id=1「打开」` → **BM_CLICK** → 回车发送 | ❌ 不碰 | ✅ 可用 | ✅ 无影响 |
-| 系统级 | `send_message(path)`：CF_HDROP 写剪贴板 + 系统 Ctrl+V | ✅ 占用 | ❌ 失效 | ⚠️ Deskflow 会同步 |
+| **窗口级（默认）** | `send_file_via_picker()`：点`file_button`点位 → 等「选择文件」对话框(#32770) → 轮询找路径栏 `Edit id=1148` → **WM_SETTEXT + 读回校验(3次重试)** → 轮询找 `Button id=1「打开」` → **BM_CLICK** → 回车发送 | ❌ 不碰 | ✅ 可用 | ✅ 无影响 |
+| 系统级（需 `--system`）| `send_message(path)`：CF_HDROP 写剪贴板 + 系统 Ctrl+V | ✅ 占用 | ❌ 失效 | ⚠️ Deskflow 会同步 |
 
 ### 3.4b sender.py — 剪贴板借用式发送（文本）
 
