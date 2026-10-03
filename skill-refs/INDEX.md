@@ -137,7 +137,7 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 
 | 通道 | 实现 | 剪贴板 | Deskflow | 其他电脑 |
 |---|---|---|---|---|
-| **窗口级（推荐）** | `send_file_via_picker()`：点`file_button`点位 → 「选择文件」对话框(#32770) → **WM_SETTEXT 填路径到 Edit 控件** → **BM_CLICK「打开」** → 回车 | ❌ 不碰 | ✅ 可用 | ✅ 无影响 |
+| **窗口级（推荐）** | `send_file_via_picker()`：点`file_button`点位 → 等「选择文件」对话框(#32770) → 轮询找路径栏 `Edit id=1148` → **WM_SETTEXT + 读回校验(3次重试)** → 轮询找 `Button id=1「打开」` → **BM_CLICK** → 回车发送 | ❌ 不碰 | ✅ 可用 | ✅ 无影响 |
 | 系统级 | `send_message(path)`：CF_HDROP 写剪贴板 + 系统 Ctrl+V | ✅ 占用 | ❌ 失效 | ⚠️ Deskflow 会同步 |
 
 ### 3.4b sender.py — 剪贴板借用式发送（文本）
@@ -276,7 +276,10 @@ python my_automation/auto_reply.py --extra wxid_a --extra wxid_b    # 附加上�
 13. **文件发送双通道**：窗口级（文件按钮+对话框控件 WM_SETTEXT/BM_CLICK，不碰剪贴板，推荐）；系统级（剪贴板粘贴，Deskflow 下失效且同步到其它电脑）
 14. **剪贴板借用不干扰**：全格式备份/还原 + `CanIncludeInClipboardHistory=0` + `ExcludeClipboardContentFromMonitorProcessing` + `Clipboard Viewer Ignore`（不进 Win+V 历史；Deskflow 仍会同步剪贴板，需在其设置关闭）
 15. **修饰键防卡死**：`ctrl_key` / 窗口前置(Alt) 均有 finally 兜底释放（Ctrl/Shift/Alt/Win），注入被 Deskflow 中断也不会卡键
-16. **文件对话框结构**（标准 IFileDialog）：`#32770` + 路径 `Edit id=1148` + 按钮 `Button id=1「打开(&O)」`；窗口级操作需直投子控件（顶层窗口不转发 WM_CHAR）
+16. **文件对话框结构**（标准 IFileDialog）：`#32770` 标题「选择文件」+ 路径 `Edit id=1148` + 按钮 `Button id=1「打开(&O)」`；窗口级操作需**直投子控件**（顶层对话框不转发 WM_CHAR/按键）
+17. **Win32 Edit 必须 WM_SETTEXT**：标准控件无输入焦点时不处理 WM_CHAR（与 Chromium 相反）；WM_SETTEXT 后**读回校验**（WM_GETTEXT）并重试，中文/长路径才稳
+18. **指针参数**：ctypes 给 `LPARAM` 传字符串/缓冲区要转 int 地址 `ctypes.cast(obj, c_void_p).value`（argtypes 用 c_ssize_t）
+19. **路径规范化**：发送前 `os.path.normpath(os.path.abspath(p))` → Windows 反斜杠形式
 
 ## 6. 演练示例
 
