@@ -26,7 +26,8 @@
 python skill-scripts/wx_status.py                          # 微信状态
 python skill-scripts/wx_open_chat.py --contact 张三        # 打开联系人聊天
 python skill-scripts/wx_send.py --contact 张三 --text "你好"
-python skill-scripts/wx_send.py --contact 张三 --file "C:/path/a.csv"
+python skill-scripts/wx_send.py --contact 张三 --file "C:/path/a.csv"            # 系统级(剪贴板)
+python skill-scripts/wx_send.py --contact 张三 --file "C:/path/a.csv" --window   # 窗口级(文件按钮,不碰剪贴板)
 python skill-scripts/wx_send_verify.py --contact 张三 --content "验证内容"
 python skill-scripts/wx_points.py show                     # 查看点位
 python skill-scripts/wx_extract.py --wxid wxid_xxx        # 提取数据库

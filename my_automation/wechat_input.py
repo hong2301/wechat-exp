@@ -40,6 +40,10 @@ VK_END = 0x23
 VK_ESCAPE = 0x1B
 VK_DOWN = 0x28
 VK_UP = 0x26
+VK_SHIFT = 0x10
+VK_MENU = 0x12      # Alt
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
 
 WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
@@ -378,8 +382,20 @@ def type_text(text, char_delay=0.01):
                 "message": f"输入失败: {type(e).__name__}: {e}"}
 
 
+def release_modifiers():
+    """兜底释放所有修饰键（Ctrl/Shift/Alt/Win），防止注入中断导致按键卡住。"""
+    try:
+        _send_keys([(VK_CONTROL, 0, KEYEVENTF_KEYUP),
+                    (VK_SHIFT, 0, KEYEVENTF_KEYUP),
+                    (VK_MENU, 0, KEYEVENTF_KEYUP),
+                    (VK_LWIN, 0, KEYEVENTF_KEYUP),
+                    (VK_RWIN, 0, KEYEVENTF_KEYUP)])
+    except Exception:
+        pass
+
+
 def ctrl_key(letter):
-    """发送 Ctrl+字母 组合键。
+    """发送 Ctrl+字母 组合键（无论成败都兜底释放修饰键，避免 Ctrl 卡住）。
 
     返回: {"ok", "code", "message"}
     """
@@ -397,6 +413,9 @@ def ctrl_key(letter):
     except Exception as e:
         return {"ok": False, "code": "ERR_INPUT",
                 "message": f"组合键失败: {type(e).__name__}: {e}"}
+    finally:
+        release_modifiers()
+        time.sleep(0.02)
 
 
 def key_press(vk):
@@ -435,8 +454,40 @@ def clear_input():
 # ---------------------------------------------------------------------------
 # 剪贴板粘贴
 # ---------------------------------------------------------------------------
+def mark_clipboard_private(u32=None):
+    """标记当前剪贴板内容“不进入历史/云同步”（保持用户 Win+V 历史不受干扰）。
+
+    写入两个 Windows 注册格式：
+      - CanIncludeInClipboardHistory = 0   （不记入 Win+V 剪贴板历史）
+      - ExcludeClipboardContentFromMonitorProcessing = 0 （不参与同步/监控）
+    需在 OpenClipboard 会话内调用。
+    """
+    if u32 is None:
+        u32 = _user32()
+    k32 = _kernel32()
+    for name in ("CanIncludeInClipboardHistory",
+                 "ExcludeClipboardContentFromMonitorProcessing",
+                 "Clipboard Viewer Ignore"):   # Deskflow/Synergy 等同步软件据此跳过
+        try:
+            fmt = u32.RegisterClipboardFormatW(name)
+            if not fmt:
+                continue
+            h = k32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 4)
+            if not h:
+                continue
+            p = k32.GlobalLock(h)
+            if p:
+                ctypes.cast(p, ctypes.POINTER(ctypes.c_uint32))[0] = 0
+                k32.GlobalUnlock(h)
+                if u32.SetClipboardData(fmt, h):
+                    continue
+            k32.GlobalFree(h)
+        except Exception:
+            continue
+
+
 def set_clipboard_text(text):
-    """把文本写入剪贴板（CF_UNICODETEXT）。成功返回 True。"""
+    """把文本写入剪贴板（CF_UNICODETEXT），并标记不进历史/同步。成功返回 True。"""
     u32 = _user32()
     k32 = _kernel32()
     if not u32.OpenClipboard(None):
@@ -454,7 +505,10 @@ def set_clipboard_text(text):
             ctypes.memmove(p, data, len(data))
         finally:
             k32.GlobalUnlock(h)
-        u32.SetClipboardData(CF_UNICODETEXT, h)
+        if not u32.SetClipboardData(CF_UNICODETEXT, h):
+            k32.GlobalFree(h)
+            return False
+        mark_clipboard_private(u32)   # 不进 Win+V 历史、不参与同步
         return True
     finally:
         u32.CloseClipboard()

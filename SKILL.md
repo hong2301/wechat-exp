@@ -41,6 +41,8 @@ python skill-scripts/wx_open_chat.py --contact 张三
 # 发消息（文字或文件，自动打开聊天窗口）
 python skill-scripts/wx_send.py --contact 张三 --text "你好"
 python skill-scripts/wx_send.py --contact 张三 --file "C:/path/file.csv"
+# 窗口级发文件（Deskflow 可用、不碰剪贴板）：
+python skill-scripts/wx_send.py --contact 张三 --file "C:/path/file.csv" --window
 
 # 发送 + 数据库验证（发送后轮询本地库确认消息已入库）
 python skill-scripts/wx_send_verify.py --contact 张三 --content "验证内容"

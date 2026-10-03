@@ -146,36 +146,96 @@ def _set_clipboard_files(paths):
             ctypes.memmove(p + header, payload, len(payload))
         finally:
             k32.GlobalUnlock(h)
-        u32.SetClipboardData(CF_HDROP, h)
+        if not u32.SetClipboardData(CF_HDROP, h):
+            k32.GlobalFree(h)
+            return False
+        wi.mark_clipboard_private(u32)   # 不进 Win+V 历史/不参与同步
         return True
     finally:
         u32.CloseClipboard()
 
 
 class _ClipboardBackup:
-    """备份/恢复剪贴板内容（文本 + 文件列表）。"""
+    """备份/恢复剪贴板（枚举全部格式，raw 复制；失败格式自动跳过）。"""
 
     def __init__(self):
-        self.text = None
-        self.files = None
+        self.items = []      # [(fmt, bytes)]
 
     def save(self):
-        self.text = _read_clipboard_text()
-        self.files = _read_clipboard_files()
+        u32 = _user32()
+        k32 = _kernel32()
+        k32.GlobalSize.restype = ctypes.c_size_t
+        k32.GlobalSize.argtypes = [ctypes.c_void_p]
+        self.items = []
+        if not u32.OpenClipboard(None):
+            return
+        try:
+            fmt = 0
+            while True:
+                fmt = u32.EnumClipboardFormats(fmt)
+                if not fmt:
+                    break
+                if fmt in (0,):
+                    continue
+                h = u32.GetClipboardData(fmt)
+                if not h:
+                    continue
+                try:
+                    size = k32.GlobalSize(h)
+                    if not size:
+                        continue
+                    p = k32.GlobalLock(h)
+                    if not p:
+                        continue
+                    try:
+                        raw = ctypes.string_at(p, size)
+                    finally:
+                        k32.GlobalUnlock(h)
+                    self.items.append((fmt, raw))
+                except Exception:
+                    continue
+        finally:
+            u32.CloseClipboard()
 
     def restore(self):
-        # 恢复优先级：文件 > 文本（原样还原）
-        if self.files is not None:
-            _set_clipboard_files(self.files)
-        elif self.text is not None:
-            _set_clipboard_text(self.text)
-        else:
+        """把备份内容完整写回剪贴板（用户原内容回归，含图片等格式）。"""
+        u32 = _user32()
+        k32 = _kernel32()
+        if not self.items:
+            # 原本就没有内容：清空
             try:
-                _user32().OpenClipboard(None)
-                _user32().EmptyClipboard()
-                _user32().CloseClipboard()
+                u32.OpenClipboard(None)
+                u32.EmptyClipboard()
+                u32.CloseClipboard()
             except Exception:
                 pass
+            return
+        try:
+            if not u32.OpenClipboard(None):
+                return
+            try:
+                u32.EmptyClipboard()
+                for fmt, raw in self.items:
+                    try:
+                        h = k32.GlobalAlloc(GMEM_MOVEABLE, len(raw))
+                        if not h:
+                            continue
+                        p = k32.GlobalLock(h)
+                        if not p:
+                            k32.GlobalFree(h)
+                            continue
+                        try:
+                            ctypes.memmove(p, raw, len(raw))
+                        finally:
+                            k32.GlobalUnlock(h)
+                        if not u32.SetClipboardData(fmt, h):
+                            k32.GlobalFree(h)
+                    except Exception:
+                        continue
+            finally:
+                u32.CloseClipboard()
+        except Exception:
+            pass
 
 
 def _paste_from_clipboard():
@@ -244,6 +304,7 @@ def paste_files_to_chat(paths) -> dict:
         if not _set_clipboard_files(paths):
             return {"ok": False, "code": "ERR_CLIPBOARD", "message": "剪贴板写入失败"}
         _paste_from_clipboard()
+        time.sleep(0.2)          # 尽快恢复，缩短剪贴板被 Deskflow 同步的窗口
         return {"ok": True, "code": "OK",
                 "message": f"已粘贴 {len(paths)} 个文件到聊天输入框"}
     finally:
@@ -268,6 +329,141 @@ def send_message(content, send=True) -> dict:
     time.sleep(0.3)
     r["message"] += "，已回车发送"
     return r
+
+
+def _enum_top_windows():
+    """枚举系统全部顶层窗口 [(hwnd, title, class, visible), ...]。"""
+    u32 = _user32()
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    out = []
+
+    def cb(h, lp):
+        try:
+            t = ctypes.create_unicode_buffer(512)
+            u32.GetWindowTextW(h, t, 512)
+            c = ctypes.create_unicode_buffer(256)
+            u32.GetClassNameW(h, c, 256)
+            out.append((h, t.value, c.value, bool(u32.IsWindowVisible(h))))
+        except Exception:
+            pass
+        return True
+
+    u32.EnumWindows(WNDENUMPROC(cb), 0)
+    return out
+
+
+def _find_dialog_child(dialog, want_class=None, want_id=None,
+                       want_text_contains=None, visible_only=True):
+    """在对话框内查找子控件（按类名 / 控件 ID / 文本包含）。返回 hwnd 或 None。"""
+    u32 = _user32()
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    found = []
+
+    def cb(h, lp):
+        try:
+            if visible_only and not u32.IsWindowVisible(h):
+                return True
+            c = ctypes.create_unicode_buffer(128)
+            u32.GetClassNameW(h, c, 128)
+            if want_class and c.value != want_class:
+                return True
+            if want_id is not None and u32.GetDlgCtrlID(h) != want_id:
+                return True
+            if want_text_contains is not None:
+                t = ctypes.create_unicode_buffer(256)
+                u32.GetWindowTextW(h, t, 256)
+                if want_text_contains not in t.value:
+                    return True
+            found.append(h)
+        except Exception:
+            pass
+        return True
+
+    u32.EnumChildWindows(wt.HWND(dialog), WNDENUMPROC(cb), 0)
+    return found[0] if found else None
+
+
+def send_file_via_picker(path: str, hwnd=None, wait_picker=3.0) -> dict:
+    """通过「文件按钮」+ 文件选择对话框发送文件（全窗口消息，不碰剪贴板）。
+
+    流程（Deskflow 友好、不影响其它电脑）：
+        1. 窗口级点击「文件按钮」点位
+        2. 等待「选择文件」对话框（#32770）
+        3. 向路径栏 Edit 控件 WM_SETTEXT 写入完整路径
+        4. 向「打开」按钮 BM_CLICK（选中文件，对话框关闭）
+        5. 回微信主窗口回车发送
+    """
+    path = str(path)
+    if not os.path.exists(path):
+        return {"ok": False, "code": "ERR_NO_FILE", "message": f"文件不存在: {path}"}
+    if hwnd is None:
+        import wechat_status as ws
+        hwnd = ws._find_main_hwnd(ws._wechat_pids())
+    if not hwnd:
+        return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+
+    import points
+    pt = points.get_point('file_button')
+    if not pt:
+        return {"ok": False, "code": "ERR_NO_POINT",
+                "message": "缺少点位 file_button（请先采集）"}
+
+    before = {h for h, _t, _c, v in _enum_top_windows() if v}
+    # 1) 点击文件按钮
+    wi.post_click(pt['x'], pt['y'])
+
+    # 2) 等待「选择文件」对话框
+    dialog = None
+    deadline = time.time() + wait_picker
+    while time.time() < deadline:
+        time.sleep(0.3)
+        for h, t, c, v in _enum_top_windows():
+            if not v or h in before:
+                continue
+            if c == '#32770' and ('选择文件' in t or '打开' in t or 'Open' in t
+                                  or 'Select' in t or t == ''):
+                dialog = h
+                break
+            if c == '#32770':
+                dialog = h
+                break
+        if dialog:
+            break
+    if not dialog:
+        return {"ok": False, "code": "ERR_NO_PICKER",
+                "message": "文件选择对话框未出现"}
+    time.sleep(0.5)
+
+    # 3) 路径写入 Edit 控件
+    u32 = _user32()
+    u32.SendMessageW.restype = ctypes.c_ssize_t
+    u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t, ctypes.c_void_p]
+    edit = (_find_dialog_child(dialog, want_id=1148, visible_only=True)
+            or _find_dialog_child(dialog, want_class='Edit', visible_only=True))
+    if not edit:
+        return {"ok": False, "code": "ERR_NO_EDIT",
+                "message": "对话框内未找到路径输入框"}
+    u32.SendMessageW(edit, 0x000C, 0, ctypes.c_wchar_p(path))   # WM_SETTEXT
+    time.sleep(0.3)
+
+    # 4) 点击「打开」按钮
+    btn = (_find_dialog_child(dialog, want_id=1, visible_only=True)
+           or _find_dialog_child(dialog, want_class='Button',
+                                 want_text_contains='打开', visible_only=True)
+           or _find_dialog_child(dialog, want_class='Button',
+                                 want_text_contains='打开'))
+    if not btn:
+        return {"ok": False, "code": "ERR_NO_BUTTON",
+                "message": "对话框内未找到「打开」按钮"}
+    u32.SendMessageW(btn, 0x00F5, 0, 0)   # BM_CLICK
+    time.sleep(1.5)
+
+    # 5) 微信窗口回车发送
+    r = wi.post_key(wi.VK_RETURN, hwnd=hwnd)
+    if not r["ok"]:
+        return r
+    return {"ok": True, "code": "OK",
+            "message": f"已通过文件按钮发送: {os.path.basename(path)}"}
 
 
 def send_text_window(text: str, hwnd=None) -> dict:

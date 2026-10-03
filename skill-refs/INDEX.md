@@ -105,6 +105,7 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 | `search_box` | 搜索框 |
 | `chat_input` | 聊天输入框 |
 | `search_split_button` | 搜一搜窗口分离按钮 |
+| `file_button` | 文件按钮（聊天输入框工具栏）|
 
 | 方法 | 说明 |
 |---|---|
@@ -130,7 +131,16 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 
 **CLI**：`python my_automation/wechat_input.py --click X Y | --type 文本 | --paste 文本`
 
-### 3.4 sender.py — 剪贴板借用式发送
+### 3.4 sender.py — 消息与文件发送
+
+**两种文件发送通道**（重要）：
+
+| 通道 | 实现 | 剪贴板 | Deskflow | 其他电脑 |
+|---|---|---|---|---|
+| **窗口级（推荐）** | `send_file_via_picker()`：点`file_button`点位 → 「选择文件」对话框(#32770) → **WM_SETTEXT 填路径到 Edit 控件** → **BM_CLICK「打开」** → 回车 | ❌ 不碰 | ✅ 可用 | ✅ 无影响 |
+| 系统级 | `send_message(path)`：CF_HDROP 写剪贴板 + 系统 Ctrl+V | ✅ 占用 | ❌ 失效 | ⚠️ Deskflow 会同步 |
+
+### 3.4b sender.py — 剪贴板借用式发送（文本）
 
 设计：备份当前剪贴板（文本/文件）→ 置入本次内容 → Ctrl+V → 回车(可选) → **恢复用户剪贴板**（不影响日常使用）。
 
@@ -138,7 +148,9 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 |---|---|
 | `paste_text_to_chat(text)` | 粘贴文本到聊天输入框（不发送） |
 | `paste_files_to_chat(paths)` | 粘贴文件（支持多个，CF_HDROP） |
-| `send_message(content, send=True)` | str=文本；存在的路径=list 按文件；send=True 回车发送 |
+| `send_message(content, send=True)` | str=文本；存在的路径=list 按文件（系统级）；send=True 回车发送 |
+| `send_file_via_picker(path)` | **窗口级文件发送（推荐）**：文件按钮 → 对话框控件操作 → 回车 |
+| `send_text_window(text)` | 窗口级文本（WM_CHAR，Deskflow 可用）|
 
 **CLI**：`python my_automation/sender.py --text 文本 | --file 路径... | --send-msg 内容`
 
@@ -261,6 +273,10 @@ python my_automation/auto_reply.py --extra wxid_a --extra wxid_b    # 附加上�
 10. **窗口焦点**：窗口级点击后发 `WM_SETFOCUS`，否则 Chromium 编辑框收不到键盘消息
 11. **消息库内容**：当前 message_0.db 只含近期消息（WAL checkpoint 节奏），历史消息可能不在主库；AI 上下文以库内已有内容为准
 12. **上下文角色**：对方消息=user、我方=assistant；extra_contacts 用 system 角色注入参考，不打断主对话
+13. **文件发送双通道**：窗口级（文件按钮+对话框控件 WM_SETTEXT/BM_CLICK，不碰剪贴板，推荐）；系统级（剪贴板粘贴，Deskflow 下失效且同步到其它电脑）
+14. **剪贴板借用不干扰**：全格式备份/还原 + `CanIncludeInClipboardHistory=0` + `ExcludeClipboardContentFromMonitorProcessing` + `Clipboard Viewer Ignore`（不进 Win+V 历史；Deskflow 仍会同步剪贴板，需在其设置关闭）
+15. **修饰键防卡死**：`ctrl_key` / 窗口前置(Alt) 均有 finally 兜底释放（Ctrl/Shift/Alt/Win），注入被 Deskflow 中断也不会卡键
+16. **文件对话框结构**（标准 IFileDialog）：`#32770` + 路径 `Edit id=1148` + 按钮 `Button id=1「打开(&O)」`；窗口级操作需直投子控件（顶层窗口不转发 WM_CHAR）
 
 ## 6. 演练示例
 

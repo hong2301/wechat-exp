@@ -459,10 +459,14 @@ def _force_foreground(hwnd):
     import time
     u32 = _user32()
     u32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-    # 按住再松开 Alt，规避前台锁定限制
-    _keybd_event(VK_MENU, 0, 0, 0)
-    _keybd_event(VK_MENU, 0, 2, 0)  # KEYEVENTF_KEYUP
-    u32.SetForegroundWindow(hwnd)
+    # 按住再松开 Alt，规避前台锁定限制（finally 兜底释放，防 Alt 卡住）
+    try:
+        _keybd_event(VK_MENU, 0, 0, 0)
+        _keybd_event(VK_MENU, 0, 2, 0)  # KEYEVENTF_KEYUP
+        u32.SetForegroundWindow(hwnd)
+    finally:
+        _keybd_event(VK_MENU, 0, 2, 0)  # 保险再抬一次
+        time.sleep(0.05)
     u32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
     time.sleep(0.15)
 

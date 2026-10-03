@@ -42,6 +42,7 @@ POINT_NAMES = {
     'search_box': '搜索框',
     'chat_input': '聊天输入框',
     'search_split_button': '搜一搜窗口分离按钮',
+    'file_button': '文件按钮',
 }
 
 

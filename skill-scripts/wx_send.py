@@ -48,6 +48,14 @@ if __name__ == "__main__":
             else:
                 r = sender.send_message(a.text, send=not a.no_enter)
         else:
-            r = sender.send_message(a.file, send=not a.no_enter)
+            if a.window:
+                # 窗口级文件发送：文件按钮 → 对话框 → 全窗口消息（不碰剪贴板）
+                files = a.file if isinstance(a.file, list) else [a.file]
+                for f in files:
+                    r = sender.send_file_via_picker(f)
+                    if not r.get('ok'):
+                        break
+            else:
+                r = sender.send_message(a.file, send=not a.no_enter)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     sys.exit(0 if r.get("ok") else 1)
