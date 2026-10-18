@@ -21,3 +21,10 @@ dist/
 # 已回复消息状态
 auto_reply_state.json
 config.json
+
+# ---- 本机开发文档（不进技能包仓库）----
+开发习惯.md
+开发记录.md
+GIT-方案.md
+开发手册.md
+docs/
