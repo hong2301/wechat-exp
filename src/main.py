@@ -37,6 +37,18 @@ def _resolve_decrypted_dir():
     return fallback
 
 
+def _wxid_from_db_dir(db_dir):
+    """从 db_storage 路径推导账号目录名（如 ``wxid_xxx_ccb3``）。
+
+    用于 decrypt 时把账号写入配置：解密输出目录自身不含账号信息，
+    若不记录，后续查询会因推不出 own_wxid 而把本人消息误判成他人。
+    """
+    if not db_dir:
+        return None
+    name = os.path.basename(os.path.dirname(os.path.abspath(db_dir)))
+    return name if name.startswith('wxid_') else None
+
+
 def _resolve_db_dir():
     """Auto-detect WeChat db_storage directory."""
     from engine.utils import find_all_wechat_data_dirs
@@ -880,7 +892,7 @@ def cmd_export(args):
         out_dir = args.output or os.path.join(BASE, '..', 'output', 'decrypted')
         success, failed, skipped = run_decrypt(keys_file=None, db_dir=db_dir, out_dir=out_dir)
         if success > 0:
-            set_backup_data_dir(out_dir)
+            set_backup_data_dir(out_dir, wxid=_wxid_from_db_dir(db_dir))
     else:
         print(f"未知导出模式: {mode}")
 

@@ -25,18 +25,33 @@ def _extract_own_wxid(tables: list) -> str:
         for part in parts:
             if part.startswith("wxid_") and len(part) > 6:
                 return part
-    # Fallback: try config file
+    # Fallback 1: 就近查找配置文件（源目录旁的 .wechat_exp_config.json）
     try:
         import json
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(tables[0]["db_path"]))), "..", ".wechat_exp_config.json")
-        for _ in range(3):
-            config_path = os.path.normpath(config_path)
-            if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-                    if cfg.get("last_backup_wxid"):
-                        return cfg["last_backup_wxid"]
-            config_path = os.path.join(os.path.dirname(config_path), "..", ".wechat_exp_config.json")
+        if tables:
+            config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(tables[0]["db_path"]))), "..", ".wechat_exp_config.json")
+            for _ in range(3):
+                config_path = os.path.normpath(config_path)
+                if os.path.exists(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        if cfg.get("last_backup_wxid"):
+                            return cfg["last_backup_wxid"]
+                config_path = os.path.join(os.path.dirname(config_path), "..", ".wechat_exp_config.json")
+    except Exception:
+        pass
+
+    # Fallback 2: 本机配置。
+    # 解密输出目录（如 output/decrypted、临时目录）路径里**不含** wxid，
+    # 上面按目录结构推导必然失败；此时读配置里记录的账号 / 源 db_storage。
+    try:
+        from engine.config_file import get_backup_wxid, get_db_dir
+        for cand in (get_backup_wxid(), get_db_dir()):
+            if not cand:
+                continue
+            m = re.search(r'wxid_[A-Za-z0-9_]+', str(cand))
+            if m:
+                return m.group(0)
     except Exception:
         pass
     return ""
