@@ -35,6 +35,27 @@ metadata:
 python "<SKILL_DIR>/skill-scripts/wx_status.py"
 ```
 
+## 环境依赖
+
+第三方包（缺失时不会报错，而是**静默返回空数据**，极易误判）：
+
+| 包 | 用途 | 缺失后果 |
+|---|---|---|
+| `pycryptodome` | SQLCipher 解密（AES-256-CBC） | 数据库完全无法解密 |
+| `zstandard` | 解压微信 4.x 的 zstd 消息内容 | **消息内容全为空**，会造成“消息没发出去”的误判 |
+| `openpyxl` | 导出 xlsx / html | 仅导出类功能失败 |
+| `jieba` | 词云分词 | 仅词云失败 |
+| `flask` | Web 查看器 | 仅 Web 失败 |
+
+窗口自动化走 `ctypes` 直接调 Win32 API，**不需要 pywin32**。
+
+```bash
+pip install -r "<SKILL_DIR>/requirements.txt"
+
+# 自检（跑任何脚本前建议先执行）
+python -c "import Crypto, zstandard; print('核心依赖 OK')"
+```
+
 ## 快速开始（脚本方式）
 
 ```bash
