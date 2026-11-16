@@ -357,11 +357,12 @@ def _find_main_hwnd_from(pids: List[int]) -> Optional[int]:
     return max(mains, key=lambda w: _window_area(w[0]))[0]
 
 
-def extra_visible_windows(exclude_main=True) -> list:
+def extra_visible_windows(exclude_main=True, exclude_panel=True) -> list:
     """枚举微信相关的所有额外可见窗口（非主窗口）。
 
     主窗口 = 可见 + 标题含「微信」+ 面积最大（弹出的小窗标题也可能是「微信」）。
     覆盖：Weixin 进程的非主窗口 + WeChatAppEx 进程可见窗口。
+    exclude_panel=True 时排除搜索下拉弹层（它本身就是独立窗口，不算异常）。
     返回 [(hwnd, title), ...]
     """
     out = []
@@ -372,11 +373,43 @@ def extra_visible_windows(exclude_main=True) -> list:
             continue
         if main_hwnd is not None and h == main_hwnd:
             continue
+        if exclude_panel and is_search_panel(h):
+            continue
         out.append((h, t))
     for h, t, v, p in _windows_for_pids(_pids_by_exe([WECHAT_APPEX])):
         if v:
             out.append((h, t))
     return out
+
+
+# 微信 4.x 把搜索结果放在独立的 Qt tool 窗口里（类名含此后缀），
+# 主窗口收不到针对它的点击——必须直接把点击发给它。
+SEARCH_PANEL_CLASS = 'QWindowToolSaveBits'
+
+
+def is_search_panel(hwnd: int) -> bool:
+    """是否为微信 4.x 的搜索结果弹层窗口。"""
+    if not hwnd:
+        return False
+    try:
+        cn = ctypes.create_unicode_buffer(128)
+        _user32().GetClassNameW(hwnd, cn, 128)
+        return SEARCH_PANEL_CLASS in cn.value
+    except Exception:
+        return False
+
+
+def get_search_panel(main_hwnd: int = None) -> Optional[int]:
+    """返回当前可见的搜索下拉弹层句柄，没有则 None。"""
+    pids = _wechat_pids()
+    if not pids:
+        return None
+    if main_hwnd is None:
+        main_hwnd = _find_main_hwnd_from(pids)
+    for h, t, v, _p in _windows_for_pids(pids):
+        if v and h != main_hwnd and is_search_panel(h):
+            return h
+    return None
 
 
 _LOGIN_KEYWORDS = ("登录", "login", "扫一扫", "二维码")
@@ -436,6 +469,7 @@ def is_logged_in() -> bool:
 # ---------------------------------------------------------------------------
 SW_RESTORE = 9
 SW_SHOW = 5
+SW_SHOWNOACTIVATE = 4   # 显示但**不激活**（不抢前台焦点）
 HWND_TOP = 0
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
@@ -518,13 +552,15 @@ def _move_to_left_half(hwnd) -> bool:
 
 
 def init_wechat_window() -> dict:
-    """微信窗口初始化（健壮版）：确保**唯一**微信主窗口前置并位于左半屏。
+    """微信窗口初始化（健壮版）：确保**唯一**微信主窗口可见并位于左半屏。
+
+    注意：**不前置、不抢焦点**（窗口级 PostMessage/SendMessage 不需要前台）。
 
     步骤：
         0) 若内嵌「搜一搜」页：点击点位4（分离按钮）先关闭嵌入页
         1) 关闭多余可见 Weixin 窗口（按标题/面积保留唯一主窗口）
         2) 关闭可见 WeChatAppEx 窗口（避免干扰）
-        3) 唤出微信主窗口（恢复/显示/前置）
+        3) 唤出微信主窗口（恢复/显示，不激活）
         4) 移动到左半屏（半屏宽 × 工作区满高）
         5) 校验是否就位（left≈0 且 宽≈半屏）；不合法重试一次
 
@@ -563,13 +599,12 @@ def init_wechat_window() -> dict:
                 logs.append(f"兜底唤出窗口 #{hwnd}")
         if not hwnd:
             return False, "未找到微信主窗口（可能尚未打开主界面）"
-        # 唤出并前置
+        # 唤出（**不抢焦点**：SW_SHOWNOACTIVATE；窗口级操作不需要前台）
         u32 = _user32()
         u32.ShowWindow(hwnd, SW_RESTORE)
         time.sleep(0.1)
-        u32.ShowWindow(hwnd, SW_SHOW)
+        u32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
         time.sleep(0.1)
-        _force_foreground(hwnd)
         # 移动到左半屏
         area = _work_area()
         if not area:

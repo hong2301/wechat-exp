@@ -247,22 +247,21 @@ def _paste_from_clipboard():
 # ---------------------------------------------------------------------------
 # 对外方法
 # ---------------------------------------------------------------------------
-def _focus_and_clear_input(window_mode=True) -> dict:
-    """点击聊天输入框并清空内容（每次输入前调用）。
+def _focus_and_clear_input(window_mode=True, click_input=False) -> dict:
+    """清空聊天输入框（回车打开聊天后**焦点已在输入框**，默认不点击）。
 
-    系统级：mouse_click(chat_input) + Ctrl+A+Delete
-    窗口级：post_click(chat_input) + 窗口内清空
+    click_input=True 时才会先点一下点位 chat_input —— 只在「没经过
+    open_contact_chat 直接发消息」这类异常路径下才需要。
     """
     import points
-    pt = points.get_point("chat_input")
-    if not pt:
-        return {"ok": False, "code": "ERR_NO_POINT",
-                "message": "缺少点位 chat_input"}
+    pt = points.get_point("chat_input") if click_input else None
     if window_mode:
-        wi.post_click(pt["x"], pt["y"])
+        if pt:
+            wi.post_click(pt["x"], pt["y"])
         r = wi.post_clear()
     else:
-        wi.mouse_click(pt["x"], pt["y"], wait_after=0.2)
+        if pt:
+            wi.mouse_click(pt["x"], pt["y"], wait_after=0.2)
         r = wi.clear_input()
     if not r["ok"]:
         return r
@@ -274,7 +273,7 @@ def paste_text_to_chat(text: str) -> dict:
     text = str(text)
     if not text.strip():
         return {"ok": False, "code": "ERR_EMPTY", "message": "文本为空"}
-    r = _focus_and_clear_input(window_mode=True)
+    r = _focus_and_clear_input(window_mode=True)   # 焦点已在输入框，不点击
     if not r["ok"]:
         return r
     backup = _ClipboardBackup()
@@ -513,13 +512,15 @@ def send_text_window(text: str, hwnd=None) -> dict:
     text = str(text)
     if not text.strip():
         return {"ok": False, "code": "ERR_EMPTY", "message": "文本为空"}
-    r = _focus_and_clear_input(window_mode=True)
+    r = _focus_and_clear_input(window_mode=True)   # 焦点已在输入框，不点击
     if not r["ok"]:
         return r
     r = wi.post_text(text, hwnd=hwnd)
     if not r["ok"]:
         return r
-    r2 = wi.post_key(wi.VK_RETURN, hwnd=hwnd)
+    # 微信 4.x：PostMessage 投递的 Enter 不触发发送（文字只变成草稿），
+    # 必须用同步 SendMessage 的击键流。
+    r2 = wi.post_enter(hwnd=hwnd)
     if not r2["ok"]:
         return r2
     return {"ok": True, "code": "OK",

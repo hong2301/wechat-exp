@@ -211,6 +211,34 @@ def post_key(vk, hwnd=None, wait=0.06):
                 "message": f"窗口按键失败: {type(e).__name__}: {e}"}
 
 
+def post_enter(hwnd=None):
+    """窗口内回车（**同步 SendMessage**）。
+
+    为什么不用 post_key：实测微信 4.x 对 PostMessage 投递的 Enter 不响应
+    （文字进了输入框但只变成草稿），而 SendMessage 的击键流能正常发送。
+    因此发送一律走这里，post_key 只用于方向键/Esc 这类非发送场景。
+    """
+    try:
+        u32 = _user32()
+        if hwnd is None:
+            hwnd = _target_window()
+        if not hwnd:
+            return {"ok": False, "code": "ERR_NO_WINDOW", "message": "未找到微信主窗口"}
+        u32.SendMessageW.restype = ctypes.c_ssize_t
+        u32.SendMessageW.argtypes = [wt.HWND, wt.UINT, ctypes.c_size_t,
+                                     ctypes.c_ssize_t]
+        u32.SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 1)
+        time.sleep(0.02)
+        u32.SendMessageW(hwnd, WM_CHAR, 0x0D, 1)
+        time.sleep(0.02)
+        u32.SendMessageW(hwnd, WM_KEYUP, VK_RETURN, 1 | (1 << 30) | (1 << 31))
+        time.sleep(0.1)
+        return {"ok": True, "code": "OK", "message": "窗口内回车发送"}
+    except Exception as e:
+        return {"ok": False, "code": "ERR_POST",
+                "message": f"窗口回车失败: {type(e).__name__}: {e}"}
+
+
 def post_clear(hwnd=None, max_backspaces=60):
     """窗口内清空输入框（同步击键流：End + 多次 Backspace）。
 

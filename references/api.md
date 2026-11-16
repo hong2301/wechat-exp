@@ -166,18 +166,20 @@ result = run_query(contact,            # 显示名/备注/微信号，支持模�
 - **搜索下拉窗（Qt title='Weixin'）只做显示**：输入后第一项默认选中，
   直接 `post_key(VK_RETURN)` 即可打开联系人（**不要按 ↓**）
 
-#### `open_contact_chat(contact, use_paste=False, wait_search=0.8, window_mode=False)` 
+#### `open_contact_chat(contact, use_paste=False, wait_search=0.8, window_mode=True)` 
 
-逐步流程：
+逐步流程（微信 4.x，2026-11 实测版）：
 1. 参数校验（contact 非空）
 2. `is_logged_in()` 失败→`ERR_NOT_LOGGED_IN`
-3. `init_wechat_window()`（内含关闭嵌入页等）失败→`ERR_WINDOW_INIT`
-4. 点击点位1 搜索框 → **清空**（Ctrl+A+Delete）
-5. 输入联系人（use_paste 或 type_text）→ 等待搜索结果（wait_search）
-6. 记 `before_width` → 点击点位2（第一联系人）
-7. **校验结果** `_check_contact_result`：宽度变化 / 额外可见窗口（搜一搜·添加朋友）/ 嵌入页 → 任一命中即失败 `ERR_CONTACT_NOT_FOUND`
-8. 失败收尾 `_cleanup_contact_fail`：独立窗口直接关；嵌入页先点**点位4**再关
-9. 点击点位3 聊天输入框 → 完成
+3. `init_wechat_window()`（左半屏、**不前置**；内含关闭嵌入页）失败→`ERR_WINDOW_INIT`
+4. 点击点位 `search_box` → **清空**（窗口级 End + 退格流）
+5. 输入联系人（窗口级 `post_text`，支持中文）→ 等搜索下拉弹层（`get_search_panel()`）
+6. 记 `wins_before = _visible_wechat_hwnds()` → **`post_enter()` 回车**打开第一项
+   （微信 4.x 只响应 SendMessage 的 Enter；回车后焦点自动落在聊天输入框）
+7. **校验结果** `_check_contact_result(wins_before)`：回车后若出现新的微信可见窗口
+   （搜一搜 / 添加朋友）→ `ERR_CONTACT_NOT_FOUND`；弹层自己收起不算新窗口
+8. 失败收尾 `_cleanup_contact_fail`：独立窗口直接关；嵌入页先点 `search_split_button` 再关
+9. 完成 —— **不再点击输入框**（点位 `chat_input` 已降级为可选）
 
 #### `send_and_verify(contact, content, use_paste=False, wait_search=0.8, verify_backoff=15, save_sql=5)`
 

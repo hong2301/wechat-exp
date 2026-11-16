@@ -39,43 +39,33 @@ def _step_fail(code: str, message: str) -> dict:
     return {"ok": False, "code": code, "message": message}
 
 
-def _check_contact_result(before_width: int) -> dict:
-    """点击第一联系人后的结果校验（按用户方案）。
+def _visible_wechat_hwnds() -> dict:
+    """当前可见的微信窗口 {hwnd: title}（用于回车前后对比）。"""
+    pids = ws._wechat_pids()
+    return {h: t for h, t, v in ws._wechat_windows(pids) if v}
 
-    成功：点击到了联系人 —— 主窗口宽度不变 且 无额外可见窗口。
-    失败情形（均为“未找到联系人”）：
-      1) 微信主窗口宽度发生变化（界面切到了别的页面/布局变化）
-      2) 出现独立的「搜一搜」可见窗口
-      3) 出现独立的「添加朋友/添加好友」可见窗口
+
+def _check_contact_result(wins_before: dict = None) -> dict:
+    """回车打开联系人后的结果校验（判据：有无新窗口）。
+
+    成功：没有出现**新的**微信可见窗口（搜索弹层收起不算新窗口）。
+    失败：出现了新的可见窗口 —— 说明查询词没匹配到联系人，
+          微信打开了搜一搜 / 添加朋友之类的窗口。
     """
     if not ws.is_wechat_running():
         return _step_fail("ERR_NO_WECHAT", "微信未运行")
 
-    # 情形 1：主窗口宽度变化
-    cur_width = ws.get_window_width()
-    if before_width and cur_width and cur_width != before_width:
+    now = _visible_wechat_hwnds()
+    before = wins_before or {}
+    new_wins = [(h, t) for h, t in now.items() if h not in before]
+    if new_wins:
+        titles = "; ".join(t or '(无标题)' for _h, t in new_wins)
         return _step_fail(
             "ERR_CONTACT_NOT_FOUND",
-            f"点击第一联系人后微信主窗口宽度变化"
-            f"({before_width}px → {cur_width}px)——未找到该联系人")
+            f"回车后出现新的微信窗口(共 {len(new_wins)} 个: {titles})"
+            f"——该查询词没有匹配到联系人")
 
-    # 情形 2/3：出现额外可见窗口（搜一搜 / 添加朋友等）
-    extras = ws.extra_visible_windows()
-    if extras:
-        titles = "; ".join(f"{t or '(无标题)'}" for _h, t in extras)
-        return _step_fail(
-            "ERR_CONTACT_NOT_FOUND",
-            f"点击第一联系人后出现额外可见窗口(共 {len(extras)} 个: {titles})"
-            f"——未找到该联系人")
-
-    # 情形 4：主窗口内嵌入了搜一搜渲染页（无独立窗口、宽度可能不变）
-    if ws.has_embedded_page():
-        return _step_fail(
-            "ERR_CONTACT_NOT_FOUND",
-            "点击第一联系人后微信主窗口内嵌入了搜一搜页面"
-            "——未找到该联系人")
-
-    return _step_ok("OK", "已点击到联系人（宽度未变 / 无额外窗口 / 无嵌入页）")
+    return _step_ok("OK", "已打开联系人聊天（无新窗口出现）")
 
 
 def _cleanup_contact_fail(window_mode=False) -> list:
@@ -134,17 +124,29 @@ def _clear_search_box(window_mode=False) -> dict:
     return _step_ok("OK", "搜索框已清空")
 
 
+def _wait_search_panel(main_hwnd, timeout: float = 2.0):
+    """等待搜索下拉弹层出现（微信 4.x），返回 hwnd 或 None。"""
+    t0 = time.time()
+    while time.time() - t0 <= timeout:
+        h = ws.get_search_panel(main_hwnd)
+        if h:
+            return h
+        time.sleep(0.1)
+    return None
+
+
 def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
                       clear_first=True, window_mode=True) -> dict:
     """打开指定联系人的聊天窗口（任务）。
 
     流程：
         1. 检测微信是否登录
-        2. 初始化微信窗口（前置 + 左半屏）
-        3. 点击点位1 search_box（搜索框）
-        4. 输入联系人名称
-        5. 输入后回车打开第一联系人（第一项默认选中，无需点位2）
-        6. 点击点位3 chat_input（聊天输入框）→ 停止
+        2. 初始化微信窗口（左半屏，不前置）
+        3. 点击点位1 search_box（搜索框）并清空
+        4. 输入联系人名称（等搜索下拉弹层出现）
+        5. **回车**（SendMessage）打开第一项联系人 —— 回车后焦点自动
+           落在聊天输入框，所以不需要再点输入框
+        6. 校验：回车后出现新的微信可见窗口 ⇒ 该查询词没匹配到联系人
 
     参数：
         contact      联系人名称 / 备注 / 关键词（输入到搜索框的内容）
@@ -181,19 +183,32 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
         return _step_fail("ERR_INPUT", f"输入联系人失败: {r['message']}")
     time.sleep(wait_search)   # 等待搜索结果出现
 
-    # 5) 打开第一联系人：输入后第一项默认选中，直接回车（无需点位2）
-    before_width = ws.get_window_width()   # 记录回车前主窗口宽度
+    main_hwnd = ws._find_main_hwnd(ws._wechat_pids())
+    panel = _wait_search_panel(main_hwnd, timeout=max(wait_search, 0.8) + 1.2)
+    if panel is None:
+        # 搜索框可能没吃到输入（焦点丢了），再清空重输一次
+        _clear_search_box(window_mode=window_mode)
+        if window_mode:
+            wi.post_text(contact)
+        else:
+            wi.paste_text(contact) if use_paste else wi.type_text(contact)
+        time.sleep(max(wait_search, 1.0))
+
+    # 5) 回车打开第一个联系人
+    #    微信 4.x 只响应 SendMessage 的 Enter（PostMessage 的会变成草稿/搜一搜），
+    #    回车后焦点自动落在聊天输入框，所以不用再点输入框（点位2 不再必需）。
+    wins_before = _visible_wechat_hwnds()
     if window_mode:
-        r = wi.post_key(wi.VK_RETURN)      # 窗口级回车
+        r = wi.post_enter()
     else:
-        r = wi.key_press(wi.VK_RETURN)     # 系统级回车
+        r = wi.key_press(wi.VK_RETURN)
     if not r["ok"]:
         return _step_fail("ERR_CLICK",
                           f"回车打开联系人失败: {r['message']}")
-    time.sleep(0.8)
+    time.sleep(0.9)
 
-    # 5b) 校验结果：宽度变化 / 搜一搜 / 添加朋友 → 未找到联系人
-    r = _check_contact_result(before_width)
+    # 5b) 校验：出现新的微信可见窗口 ⇒ 查询词没匹配到联系人
+    r = _check_contact_result(wins_before)
     if not r["ok"]:
         # 收尾：关闭搜一搜（嵌入式先点点位4）/ 添加朋友等窗口
         cleanup_logs = _cleanup_contact_fail(window_mode=window_mode)
@@ -202,22 +217,10 @@ def open_contact_chat(contact: str, use_paste=False, wait_search=0.8,
             else "\n    [收尾] 无需清理")
         return r
 
-    # 6) 点击聊天输入框（点位3）→ 停止（回到主窗口）
-    pt = points.get_point("chat_input")
-    if not pt:
-        return _step_fail("ERR_NO_POINT",
-                          "缺少点位 chat_input，请先运行点位采集")
-    if window_mode:
-        r = wi.post_click(pt["x"], pt["y"])   # 默认主窗口
-    else:
-        r = wi.mouse_click(pt["x"], pt["y"], wait_after=0.3)
-    time.sleep(0.3)
-    if not r["ok"]:
-        return _step_fail("ERR_CLICK", f"点击聊天输入框失败: {r['message']}")
-
+    # 6) 完成：回车后焦点已在聊天输入框，无需再点击
     return _step_ok("OK",
-                    f"已打开联系人「{contact}」的聊天窗口（搜索框已输入，"
-                    f"已定位到聊天输入框，等待发送）")
+                    f"已打开联系人「{contact}」的聊天窗口"
+                    f"（焦点已在聊天输入框，等待发送）")
 
 
 def _verify_sent_local(db_storage: str, content: str,

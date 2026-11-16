@@ -28,3 +28,20 @@
     - 现象对照：鼠标乱动=系统级 SetCursorPos；Ctrl/Alt 卡住=系统级组合键注入；回车打到其它电脑=系统级 SendInput Enter（可能触发桌面全选等操作）
     - 默认值约定：`wx_send/wx_open_chat/wx_send_verify` 默认窗口级，系统级需显式 `--system`
 
+21. **微信 4.x 的 Enter 必须 SendMessage，PostMessage 无效**（2026-11 实测）：
+    - 现象一：文字成功进了输入框，但按回车后只变成会话列表里的「草稿」，没有发送。
+    - 现象二：搜索框里按回车直接弹出「搜一搜」网页窗口，而不是打开联系人。
+    - 原因：微信 4.x 不响应 `PostMessage(WM_KEYDOWN/WM_KEYUP)` 投递的 Enter。
+    - 解法：统一用同步 `SendMessage` 击键流（`wechat_input.post_enter()`：WM_KEYDOWN → WM_CHAR(0x0D) → WM_KEYUP）。
+      `post_key()` 只保留给方向键 / Esc 这类非发送场景。
+22. **搜索结果是独立的 Qt 弹层窗口**：微信 4.x 把下拉结果放在类名含 `QWindowToolSaveBits`、
+    标题为 `Weixin` 的**独立顶层窗口**里；发往主窗口的点击它收不到（表现为点击后弹层毫无反应）。
+    - 识别：`wechat_status.get_search_panel()`（返回 hwnd 或 None）
+    - 点击：`wechat_input.post_click(x, y, hwnd=panel)`（传 hwnd 时按屏幕坐标→该窗口客户区换算）
+    - 另外：`extra_visible_windows()` 已默认排除该弹层，否则会被误判成「没找到联系人」。
+23. **找到联系人的判据是「有没有冒出新窗口」**：回车打开联系人后，若出现新的微信可见窗口
+    （搜一搜 / 添加朋友），说明这个查询词没匹配到人 → `ERR_CONTACT_NOT_FOUND`。
+    搜索弹层自己收起不算新窗口。别再拿「主窗口宽度变化」当判据（微信 4.x 布局会自己变宽）。
+24. **回车后不要再点聊天输入框**：微信回车打开聊天后焦点已自动落在输入框，
+    点位 `chat_input` 因此降级为可选；`send_text_window` 默认只清空、不点击。
+    这样点位从 4 个减到 3 个（search_box / search_split_button / file_button），少一个失效点。

@@ -1,71 +1,76 @@
 # 微信数据（WeChat Data）
 
-> 一个完整的 Agent Skill：**读**微信本地聊天数据库（提取 / 查询），并**写**微信客户端（自动化操作：状态检测、窗口初始化、发消息、发送验证）。
+本机微信的读写技能：**读**本地聊天数据库，**写**微信客户端（发文字/文件、自动回复）。
+全程走 Windows 窗口消息（`PostMessage` / `SendMessage`），**不前置窗口、不动真实鼠标键盘**，
+所以 Deskflow 切到别的机器时也能正常发。
 
-基于 [WeChat EXP](https://github.com/sunhanaix/pc_wechat_exp)（上游主依赖），以 skill 方式封装为两个自定义能力域，整体作为 pi skill 使用。
+## 你可以这样跟 agent 说
 
----
+```text
+给泰运长临发条消息：明天下午三点开会。
+看看我和「五和」最近的聊天记录，导出成表格。
+微信现在是登录状态吗？窗口有没有被别的页面占掉？
+新人加我微信没？没加上就发条消息问一下。
+```
 
-## ✨ 能力一览
+## 三个域
 
-| 域 | 模块 | 能力 |
-|---|---|---|
-| **读** `my_tools/` | `extract.py` | 输入微信本地数据库 + 时间范围 → 解密形成本地数据库 |
-| | `query.py` | 联系人 + 时间段 → 完整聊天数据（JSON / TXT / HTML） |
-| | `checker.py` | 检测模块：路径 / 密钥 / 时间 / 联系人校验，预设错误返回 |
-| **写** `my_automation/` | `wechat_status.py` | 登录检测（数据目录锁定判定）、窗口初始化（唯一主窗口 + 左半屏）、嵌入页检测 |
-| | `points.py` | 点位管理（JSON 存储 + 交互采集：单击预览 / 双击确认 / 右键取消） |
-| | `wechat_input.py` | 点击 / UNICODE 输入 / 剪贴板粘贴 / 清空输入框 |
-| | `sender.py` | 剪贴板借用式发送（文本 / 文件），用后恢复不影响日常剪贴板 |
-| | `tasks.py` | **组合任务**：打开联系人聊天、发送 + 数据库验证、失败收尾清理 |
+| 目录 | 能力 |
+|---|---|
+| `my_tools/` | **读**：数据库解密 → 导出 / 按联系人和时间段查询 |
+| `my_automation/` | **写**：登录检测、窗口初始化、点位管理、打开聊天、发消息、发送后读库验证 |
+| `src/` | 底层：SQLCipher 解密、zstd 解压、密钥提取 |
 
-## 🚀 快速开始
+命令行入口在 `skill-scripts/`，每个都是薄壳：
 
 ```bash
-# 技能脚本（skill-scripts/，也可直接 python wechat-exp 内模块）
-python skill-scripts/wx_status.py                          # 微信状态
-python skill-scripts/wx_open_chat.py --contact 张三        # 打开联系人聊天
+python skill-scripts/wx_status.py                 # 运行/登录/窗口状态
+python skill-scripts/wx_init_window.py            # 窗口就位左半屏（不前置）
+python skill-scripts/wx_points.py show|capture    # 点位查看 / 交互采集
+python skill-scripts/wx_open_chat.py --contact 张三
 python skill-scripts/wx_send.py --contact 张三 --text "你好"
-python skill-scripts/wx_send.py --contact 张三 --file "C:/path/a.csv"            # 窗口级(文件按钮,不碰剪贴板)
-python skill-scripts/wx_send.py --contact 张三 --file "C:/path/a.csv" --system   # 系统级(剪贴板,仅非Deskflow)
-python skill-scripts/wx_send_verify.py --contact 张三 --content "验证内容"
-python skill-scripts/wx_points.py show                     # 查看点位
-python skill-scripts/wx_extract.py --wxid wxid_xxx        # 提取数据库
-python skill-scripts/wx_query.py --contact 张三           # 查询聊天
+python skill-scripts/wx_send_verify.py --contact 张三 --content "你好"   # 发送 + 读库验证
+python skill-scripts/wx_query.py --contact 张三 --date-from 2025-01-01 --date-to 2025-12-31
 ```
 
-## 🧩 Skill 结构
+## 前置条件
 
-```
-.
-├── SKILL.md                  ← skill 入口（pi 规范）
-├── skill-refs/INDEX.md       ← 完整索引：方法签名 / 组合流程 / CLI / 错误码 / 防坑经验
-├── skill-scripts/            ← 8 个可执行脚本（薄壳，可独立运行）
-├── my_tools/                 ← 读域（本地数据库）
-├── my_automation/            ← 写域（微信自动化）
-├── src/                      ← 上游 WeChat EXP（主依赖，随 upstream 更新）
-└── .gitignore                ← 忽略密钥配置 / 点位坐标 / 运行产物
-```
-
-## 🧵 组合任务（核心流程）
-
-- **`tasks.open_contact_chat(contact)`**：检测登录 → 窗口初始化（自动关闭嵌入搜一搜页）→ 清空并搜索 → 点第一联系人 → **校验结果**（主窗口宽度变化 / 独立搜一搜 / 添加朋友 / 嵌入页 任一命中即判未找到）→ 点聊天输入框；失败自动收尾清理
-- **`tasks.send_and_verify(contact, content)`**：打开聊天 → 粘贴 + 回车发送 → **轮询解密本地库验证**（每秒 1 次，最多 12 次；微信数据库约 5~10s 才 checkpoint，读库总是滞后几秒）
-
-所有方法统一返回 `{"ok": bool, "code": str, "message": str}`，错误码全表见 `skill-refs/INDEX.md`。
-
-## 📌 前提与合规
-
-- Windows 10/11 + 微信 4.x，微信需已登录（密钥从进程内存自动提取）
-- 仅处理**自己的**聊天数据，解密密钥与点位坐标不入库
-- 主依赖项目（`src/`、参考项目）默认不主动查看，特殊情况经用户许可
-
-## 🔄 上游同步
+- 微信 PC 版（Weixin.exe）**运行且已登录**
+- 系统 Python 装好依赖：
 
 ```bash
-git fetch upstream && git merge upstream/master   # 自定义模块独立，几乎零冲突
+pip install -r requirements.txt     # pycryptodome / zstandard / openpyxl / jieba / flask
+python -c "import Crypto, zstandard; print('核心依赖 OK')"
 ```
 
-## 📜 许可
+- 点位已采集（`my_automation/points.json`）：搜索框、搜一搜分离按钮、文件按钮。
+  换屏幕分辨率 / 改微信窗口布局后必须重新采：
 
-私有工具项目（上游 WeChat EXP 部分版权归原作者；本自定义部分保留）。
+```bash
+python my_automation/points.py capture
+```
+
+采集时的窗口布局要和运行一致 —— 先跑一次 `wx_init_window.py`（窗口会摆到左半屏）再采。
+
+## 微信 4.x 的四个坑（改代码前必看）
+
+1. **`PostMessage` 的 Enter 不发送**：文字只会变成草稿。必须用同步 `SendMessage`
+   （已封装为 `wechat_input.post_enter()`）。
+2. **搜索结果在独立的 Qt 弹层窗口里**（类名 `QWindowToolSaveBits`），主窗口收不到对它的点击。
+3. **回车打开联系人后焦点自动在输入框**，不需要再点输入框。
+4. **找不到联系人的信号**：回车后冒出新的微信窗口（搜一搜/添加朋友）＝这个名字没匹配到人。
+
+## 发送验证失败先看是不是密钥问题
+
+`ERR_SEND_UNVERIFIED` 的 message 里如果出现「无密钥，无法解密」，说明**不是没发出去**，
+而是解密密钥跟当前库对不上（微信升级、切账号、库重建都会变）。重新提取即可：
+
+```bash
+python src/main.py export --mode keys --db-dir "D:\xwechat_files\wxid_xxx_ccb3\db_storage"
+```
+
+## 注意
+
+- `points.json`（点位）和 `.wechat_exp_config.json`（解密密钥）是本机敏感配置，已 gitignore，
+  不要外传、不要贴进任何输出。
+- 发消息是真实操作，测试请用自己的号 / 「文件传输助手」，不要随手发给真实联系人。

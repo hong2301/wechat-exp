@@ -72,7 +72,7 @@ python skill-scripts/wx_points.py show
 python skill-scripts/wx_points.py capture
 python skill-scripts/wx_points.py capture --point search_box
 
-# 打开联系人聊天（自动完成：检测登录→初始化窗口→搜索→点联系人→点输入框）
+# 打开联系人聊天（搜索 → 输入 → **回车**；回车后焦点已在输入框）
 python skill-scripts/wx_open_chat.py --contact 张三
 
 # 发消息（文字或文件，自动打开聊天窗口）
@@ -148,6 +148,52 @@ python -c "import sys; sys.path.insert(0,'<SKILL_DIR>/src'); from backup.decrypt
 
 常见失败：打不开进程（微信未运行/权限不足）、多个 `MISSING`（冷分片未加载，先点开对应聊天）、多账号需分别执行。
 
+## 微信 4.x 关键行为（必读，踩过的坑）
+
+这五条决定了整套窗口级自动化能不能跑通，改代码前先看：
+
+1. **PostMessage 的 Enter 不触发发送**。窗口级 `PostMessage(WM_KEYDOWN)` 投递的回车，
+   微信 4.x 要么忽略（文字留在输入框变成「草稿」），要么在搜索框里变成「搜一搜」。
+   必须用 **同步 `SendMessage`** 的击键流 —— 已封装成 `wechat_input.post_enter()`，
+   发送和「回车打开联系人」都走它。`post_key()` 只用于方向键 / Esc。
+2. **搜索结果是独立的 Qt 弹层窗口**（类名含 `QWindowToolSaveBits`，标题 `Weixin`）。
+   它不属于主窗口，**发往主窗口的点击它收不到**。需要点击时把 `hwnd` 传给
+   `wechat_input.post_click(x, y, hwnd=panel)`；判断它是否存在用
+   `wechat_status.get_search_panel()`。
+3. **回车打开联系人后，焦点自动落在聊天输入框**，所以发消息前**不需要**再点输入框，
+   点位 `chat_input` 是可选项（只在“未经 open_contact_chat 直接发送”时作容错）。
+4. **不要前置 / 不要动真实鼠标**。全部用 `PostMessage` / `SendMessage`，
+   `init_wechat_window()` 用 `SW_SHOWNOACTIVATE` 唤出窗口，不抢焦点。
+   这样 Deskflow 切到别的机器时也能稳定发送。
+5. **找不到联系人的判据**：回车后如果出现**新的微信可见窗口**
+   （搜一搜 / 添加朋友），就是这个查询词没匹配到联系人 → `ERR_CONTACT_NOT_FOUND`。
+   搜索弹层自己收起**不算**新窗口。
+
+### 标准发送流程（窗口级）
+
+```
+init_wechat_window()           # 左半屏、不前置
+→ 点 search_box + 清空
+→ post_text(联系人名)          # SendMessage 击键，支持中文
+→ post_enter()                 # 回车打开第一项联系人，焦点落到输入框
+→ 校验：有无新窗口（有=没找到人）
+→ post_text(消息内容)
+→ post_enter()                 # 发送
+→ 读库验证（send_and_verify）  # 约 8~10s 后 checkpoint 落库
+```
+
+### 点位清单
+
+| 点位 | 必需 | 用途 |
+|---|---|---|
+| `search_box` | ✅ | 点搜索框并清空 |
+| `search_split_button` | ✅ | 内嵌搜一搜页时点它分离/关闭 |
+| `file_button` | ✅ | 发文件时点「文件夹」图标 |
+| `chat_input` | 可选 | 回车后焦点已在输入框，一般不需要 |
+
+点位是**屏幕绝对坐标**，采集时的窗口布局必须和运行时的布局一致：
+运行时会 `init_wechat_window()` 把窗口摆成左半屏（工作区一半宽），所以**采点前先初始化一次窗口**。
+
 ## 详细参考
 
 | 文件 | 内容 | 何时读 |
@@ -162,3 +208,8 @@ python -c "import sys; sys.path.insert(0,'<SKILL_DIR>/src'); from backup.decrypt
 2. 多账号环境：先 `wx_status` 查 wxid，需定位具体账号时用 `--wxid` 指定
 3. 发消息前先确认联系人名称，对不确定的名字先 `wx_query` 核对后再发
 4. `points.json`（点位坐标）与 `.wechat_exp_config.json`（解密密钥）是本机敏感配置，不外传、不写入任何输出
+5. **发送验证失败先查密钥**：`ERR_SEND_UNVERIFIED` 里夹着「无密钥，无法解密」时，
+   不是没发出去，而是密钥过期了（微信升级/切账号会变）。按上文「密钥失效」重新提取，
+   并用 `wx_send_verify` 再发一条确认真能落库。
+6. 回复用户时不要重建自己的确认步骤：技能返回 `ok=false` 时把 `message` 原样报出来，
+   不要笼统说“发送失败”。
