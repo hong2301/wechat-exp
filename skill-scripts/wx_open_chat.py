@@ -25,7 +25,7 @@ if __name__ == "__main__":
     ap.add_argument("--system", action="store_true",
                     help="使用系统级操作(默认窗口级)")
     ap.add_argument("--window", action="store_true",
-                    help="窗口级模式(PostMessage直达,不依赖系统焦点,适合Deskflow)")
+                    help="兼容旧命令用；默认已是窗口级(PostMessage直达)，此开关无额外作用")
     a = ap.parse_args()
     r = tasks.open_contact_chat(a.contact, use_paste=a.paste, wait_search=a.wait,
                                 window_mode=not getattr(a, "system", False))

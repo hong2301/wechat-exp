@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """wx_init_window — 微信窗口初始化（skill 薄壳）。
-自动：关闭嵌入搜一搜页(点位4) → 唯一主窗口前置 → 左半屏 → 校验。
+自动：关闭嵌入搜一搜页(点位 search_split_button) → 唯一主窗口唤出(不抢焦点) → 左半屏 → 校验。
 用法: python wx_init_window.py"""
 import json
 import os

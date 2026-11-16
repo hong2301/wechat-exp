@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """wx_query — 查询联系人聊天数据（skill 薄壳，透传 my_tools/query.py）。
-用法: 同 my_tools/query.py，见 skill-refs/INDEX.md 2.2 节"""
+用法: 同 my_tools/query.py，见 references/api.md 2.2 节"""
 import os
 import subprocess
 import sys

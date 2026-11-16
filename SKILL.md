@@ -21,10 +21,11 @@ metadata:
 ├── references/             # 详细参考，按需查阅
 │   ├── api.md              # 模块地图 / 方法签名 / AI 自动回复
 │   ├── error-codes.md      # 错误码全表
-│   └── pitfalls.md         # 20 条防坑记录
+│   └── pitfalls.md         # 24 条防坑记录
 ├── skill-scripts/          # 命令行入口
-├── my_automation/          # 微信客户端自动化
+├── my_automation/          # 微信客户端自动化（发消息 / 监控 / 自动回复）
 ├── my_tools/               # 本地数据库读写
+├── ai/                     # GLM 调用（自动回复用）
 ├── src/                    # 解密与数据服务
 └── .wechat_exp_config.json # 本机数据库密钥
 ```
@@ -103,6 +104,8 @@ import points                       # 点位存取 + 交互采集
 import wechat_input as wi           # 点击 / 打字 / 粘贴 / 清空
 import sender                       # 粘贴式发送（文本/文件）+ 回车
 import tasks                        # 组合任务：打开聊天 / 发送与验证
+import monitor                      # 新消息监控（只读轮询本地库）
+import auto_reply                   # 监控 + GLM 上下文 + 自动发送
 from my_tools.extract import run_extract
 from my_tools.query import run_query
 ```
@@ -114,6 +117,26 @@ from my_tools.query import run_query
 | `tasks.open_contact_chat(contact)` | 检测登录→初始化窗口→清空并输入搜索→点第一联系人→校验(宽度/嵌入页/独立窗口)→点聊天输入框 | `{ok, code, message}` |
 | `tasks.send_and_verify(contact, content)` | 打开聊天→粘贴+回车→轮询本地库验证（最多12次每秒1次，微信 checkpoint 约8~10s） | `{ok, code, message}` |
 | `wechat_status.init_wechat_window()` | 若内嵌搜一搜页先点点位4关闭→关闭多余窗口/AppEx→前置→左半屏→校验(降级不阻塞) | `{ok, code, message}` |
+
+## 监控与自动回复（可选）
+
+```python
+import monitor
+mon = monitor.MessageMonitor()        # 缺省挂当前登录账号的库
+mon.poll_once()                       # 本轮新消息
+mon.load_history_for(sender_id, 10)   # 某人的最近历史（AI 上下文）
+
+import auto_reply
+auto_reply.auto_reply(only_contact="张三", dry_run=True, run_seconds=60)
+```
+
+只回复**对方发的文本消息**；发送者必须能解析成真实 wxid 且能在会话表里找到可搜索身份，
+否则直接跳过（防误发给同名的人）。`one_shot=True` 时同一人回一条即停。
+
+```bash
+python "<SKILL_DIR>/my_automation/monitor.py" --seconds 60
+python "<SKILL_DIR>/my_automation/auto_reply.py" --dry-run --seconds 60
+```
 
 完整参数签名见 `references/api.md`。
 
@@ -200,7 +223,7 @@ init_wechat_window()           # 左半屏、不前置
 |---|---|---|
 | `references/api.md` | 模块地图、方法签名、AI 自动回复、窗口模式 | 需要调库或看参数细节 |
 | `references/error-codes.md` | 错误码全表 | 遇到 `ERR_*` |
-| `references/pitfalls.md` | 20 条防坑记录 | 遇到点击 / 发送 / 窗口异常时必读，尤其第 20 条 Deskflow 铁律 |
+| `references/pitfalls.md` | 24 条防坑记录 | 遇到点击 / 发送 / 窗口异常时必读；第 20 条 Deskflow 铁律、第 21~24 条微信 4.x 行为 |
 
 ## 使用约定
 

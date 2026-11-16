@@ -29,7 +29,7 @@ if __name__ == "__main__":
     ap.add_argument("--system", action="store_true",
                     help="文件发送用系统级剪贴板粘贴（默认窗口级文件按钮）")
     ap.add_argument("--window", action="store_true",
-                    help="窗口级模式(PostMessage直达,不依赖系统焦点,适合Deskflow)")
+                    help="兼容旧命令用；默认已是窗口级(PostMessage直达)，此开关无额外作用")
     a = ap.parse_args()
 
     if not a.text and not a.file:

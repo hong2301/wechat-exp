@@ -18,7 +18,8 @@
 | 目录 | 能力 |
 |---|---|
 | `my_tools/` | **读**：数据库解密 → 导出 / 按联系人和时间段查询 |
-| `my_automation/` | **写**：登录检测、窗口初始化、点位管理、打开聊天、发消息、发送后读库验证 |
+| `my_automation/` | **写**：登录检测、窗口初始化、点位管理、打开聊天、发消息、发送后读库验证、新消息监控、AI 自动回复 |
+| `ai/` | GLM 调用（自动回复用，密钥在 `config.json`，已 gitignore） |
 | `src/` | 底层：SQLCipher 解密、zstd 解压、密钥提取 |
 
 命令行入口在 `skill-scripts/`，每个都是薄壳：
@@ -31,6 +32,13 @@ python skill-scripts/wx_open_chat.py --contact 张三
 python skill-scripts/wx_send.py --contact 张三 --text "你好"
 python skill-scripts/wx_send_verify.py --contact 张三 --content "你好"   # 发送 + 读库验证
 python skill-scripts/wx_query.py --contact 张三 --date-from 2025-01-01 --date-to 2025-12-31
+```
+
+监控与自动回复直接调模块（没有薄壳）：
+
+```bash
+python my_automation/monitor.py --seconds 60              # 只监控新消息
+python my_automation/auto_reply.py --dry-run --seconds 60 # 只生成回复不发送
 ```
 
 ## 前置条件

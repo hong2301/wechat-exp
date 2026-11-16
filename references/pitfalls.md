@@ -1,6 +1,6 @@
 # 关键经验（防坑记录）
 
-> **动手改自动化代码前必读**，这 20 条都是实测踩过的坑。
+> **动手改自动化代码前必读**，这 24 条都是实测踩过的坑（20 条窗口/自动化 + 第 21~24 条微信 4.x 行为）。
 
 1. **WAL checkpoint**：微信 4.x 消息先进 WAL，约 8~10s 才并入主库；读库验证必须轮询或留足时间
 2. **64 位句柄**：`GlobalAlloc / SetClipboardData / CreateToolhelp32Snapshot / OpenProcess` 等必须显式 `restype=c_void_p`，否则句柄截断失败（多次踩坑）

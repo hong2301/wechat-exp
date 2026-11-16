@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """wx_extract — 微信数据库提取（skill 薄壳，透传 my_tools/extract.py）。
-用法: 同 my_tools/extract.py，见 skill-refs/INDEX.md 2.1 节"""
+用法: 同 my_tools/extract.py，见 references/api.md 2.1 节"""
 import os
 import subprocess
 import sys
