@@ -122,7 +122,10 @@ class MessageMonitor:
                                 f"ORDER BY create_time DESC LIMIT {max_rows}",
                                 (int(win_begin),)):
                             r = list(r)
-                            r[2] = _resolve_sender(r[2], n2id)
+                            # 列序: local_id, server_id, local_type, real_sender_id, ...
+                            # real_sender_id 是 index 3（曾错写成 2，导致 local_type
+                            # 被覆盖成 wxid 字符串、sender_id 停在数字 rowid）
+                            r[3] = _resolve_sender(r[3], n2id)
                             rows.append((tbl, tuple(r)))
                     except sqlite3.Error:
                         continue
@@ -195,14 +198,14 @@ class MessageMonitor:
                                 f"create_time, origin_source, message_content "
                                 f"FROM [{tbl}] ORDER BY create_time DESC LIMIT {limit2}"):
                             r = list(r)
-                            r[2] = _resolve_sender(r[2], n2id)
-                            if r[2] == sender_id:
-                                if before_ts and (r[3] or 0) >= int(before_ts):
+                            r[3] = _resolve_sender(r[3], n2id)
+                            if r[3] == sender_id:
+                                if before_ts and (r[4] or 0) >= int(before_ts):
                                     continue
                                 rows.append(tuple(r))
                     except sqlite3.Error:
                         continue
-                rows.sort(key=lambda r: r[3] or 0, reverse=True)
+                rows.sort(key=lambda r: r[4] or 0, reverse=True)
                 return [self._format(r) for r in rows[:limit]]
             finally:
                 conn.close()
@@ -244,7 +247,7 @@ class MessageMonitor:
                         continue
                     n2id = load_name2id(conn)
                     for row in rows:
-                        content = row[5]
+                        content = row[6]
                         if isinstance(content, bytes):
                             try:
                                 content = decompress_content(content)
@@ -257,9 +260,9 @@ class MessageMonitor:
                                 content = ''
                         if kw in str(content or ''):
                             r2 = list(row)
-                            r2[2] = _resolve_sender(r2[2], n2id)
+                            r2[3] = _resolve_sender(r2[3], n2id)
                             hits.append((tuple(r2), str(content or '')))
-                hits.sort(key=lambda r: r[0][3] or 0, reverse=True)
+                hits.sort(key=lambda r: r[0][4] or 0, reverse=True)
                 out = []
                 for row, content in hits[:limit]:
                     m = self._format(row)
@@ -316,15 +319,18 @@ class MessageMonitor:
             print("监控器初始化失败：未找到微信数据库或密钥")
             return self.stats
 
-        base = self.baseline()
+        self.baseline()
         # 预热：把窗口内已有消息标记为已见（启动不把历史当新消息上报）
+        # 注意：这里直接灌 _seen，不走 poll_once —— 否则预热的这批会被计进
+        # stats["new_messages"]，日志出现“新消息 N 条”但回调一条都没触发的假象。
         try:
-            self.poll_once()
+            for _tbl, r in self._fetch_new():
+                self._seen.add(str(r[1] or r[0]))
         except Exception:
             pass
         print(f"监控已启动 | 库: {os.path.basename(self.src)} | "
               f"扫描窗口: 最近 {self.window_seconds}s | "
-              f"基准时间: {time.strftime('%H:%M:%S', time.localtime(base))} | "
+              f"基准时间: {time.strftime('%H:%M:%S')} | "
               f"轮询间隔 {interval}s")
 
         t0 = time.time()
